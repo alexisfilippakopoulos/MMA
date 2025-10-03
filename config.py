@@ -131,7 +131,7 @@ def get_args():
                         help='audio feature dim')
     parser.add_argument('--vision_dim', type=int, default=20,
                         help='vision feature dim')
-    parser.add_argument('--num_epochs', type=int, default=20,  
+    parser.add_argument('--num_epochs', type=int, default=25,  
                         help='number of epochs (default: 20)')
     parser.add_argument('--patience', type=int, default=10,
                         help='when to stop training if best never change')

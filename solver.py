@@ -117,7 +117,7 @@ class Solver(object):
                 batch_size = y.size(0)               
                 preds, LBLoss = model(vision, audio, text)
                 y_loss = criterion(preds, y)
-                loss = y_loss + 0.001*LBLoss
+                loss = y_loss + 0.01 * LBLoss
                 loss.backward()
                 
                 # -------------------------------------------------------- #
