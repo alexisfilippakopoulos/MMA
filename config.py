@@ -1,3 +1,46 @@
+"""
+MOSI Dataset (Best Results)
+Number of experts per modality (N): 2
+α (impact control parameter): 32
+λ (load balancing loss weight): 0.01
+Rank of LoRA: 32
+Number of activated experts (K): 3
+Batch size: 128
+Learning rates tested: {1e-3, 2e-4}
+Optimizers tested: {AdamW, Adam}
+Training epochs: 25
+Position of MMA: Type (d) - parallel insertion form, modifying FFN representation
+
+Results achieved:
+
+MAE: 0.693
+Corr: 0.803
+ACC-7: 46.9%
+ACC-2: 86.4%
+F1: 86.4%
+
+MOSEI Dataset (Best Results)
+
+Number of experts per modality (N): 2
+α: 32
+λ: 0.01
+Rank of LoRA: 32
+Batch size: 128
+Learning rates tested: {1e-3, 2e-4}
+Optimizers tested: {AdamW, Adam}
+Training epochs: 25
+
+Results achieved:
+MAE: 0.529
+Corr: 0.766
+ACC-7: 55.2%
+ACC-2: 85.7%
+F1: 85.7%
+
+Note: The paper mentions these as the general hyperparameters but doesn't specify which exact learning rate and optimizer combination from the tested options produced the absolute best results for each dataset.
+"""
+
+
 import os
 import argparse
 from datetime import datetime
@@ -66,13 +109,13 @@ def get_args():
     # Training Setting
     parser.add_argument('--batch_size', type=int, default=128, metavar='N',
                         help='batch size')
-    parser.add_argument('--clip', type=float, default=1.0,
+    parser.add_argument('--clip', type=float, default=0.5,
                         help='gradient clip value (default: 0.8)')
     parser.add_argument('--lr_main', type=float, default=1e-3,
                         help='initial learning rate for main model parameters (default: 1e-3)')
-    parser.add_argument('--lr_lora', type=float, default=1e-3,
+    parser.add_argument('--lr_lora', type=float, default=1e-4,
                         help='initial learning rate for lora parameters (default: 1e-3)')
-    parser.add_argument('--lr_adapter', type=float, default=1e-3,
+    parser.add_argument('--lr_adapter', type=float, default=1e-4,
                         help='initial learning rate for lora parameters (default: 1e-3)')
     
     parser.add_argument('--weight_decay_main', type=float, default=1e-4,
