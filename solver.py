@@ -59,7 +59,10 @@ class Solver(object):
                 
             for p in main_param:
                 if p.dim() > 1: # only tensor with no less than 2 dimensions are possible to calculate fan_in/fan_out
-                    nn.init.xavier_normal_(p) 
+                    nn.init.xavier_normal_(p, gain=0.1)  # Use smaller gain to prevent large initial values
+                elif p.dim() == 1:  # bias terms
+                    nn.init.zeros_(p) 
+
 
         
         optimizer_main_group = [

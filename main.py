@@ -16,20 +16,21 @@ logging.getLogger ().setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO, filename='MMA.log')
 
 def set_seed(seed):
-    torch.set_default_tensor_type('torch.FloatTensor') 
     torch.manual_seed(seed)  
     if torch.cuda.is_available():  
         torch.cuda.manual_seed_all(seed) 
-        torch.set_default_tensor_type('torch.cuda.FloatTensor')  
+        torch.set_default_dtype(torch.float32)
+        torch.set_default_device('cuda')
         torch.backends.cudnn.deterministic = True 
         torch.backends.cudnn.benchmark = False  
-
         use_cuda = True
+    else:
+        torch.set_default_dtype(torch.float32)
+        torch.set_default_device('cpu')
 
 if __name__ == '__main__':
     args = get_args()
     dataset = str.lower(args.dataset.strip())  
-    print("MAIIIIIIIIN", torch.cuda.is_available())
     
     set_seed(args.seed)
     print("Start loading the data....")

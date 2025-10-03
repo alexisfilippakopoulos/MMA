@@ -103,13 +103,13 @@ def MMDataLoader(args):
 
     if 'seq_lens' in args:
         args.seq_lens = datasets['train'].get_seq_len() 
-
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dataLoader = {
         ds: DataLoader(datasets[ds],
                        batch_size=args.batch_size,
                     #    num_workers=args.num_workers,
                        shuffle=True,
-                       generator=torch.Generator(device='cuda'))
+                       generator=torch.Generator(device=device))
         for ds in datasets.keys()
     }
     

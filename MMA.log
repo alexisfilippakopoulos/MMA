@@ -1,0 +1,252 @@
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:root:Runing code on the mosi dataset.
+INFO:root:--------args----------
+INFO:root:dataset: mosi
+INFO:root:data_path: data/MOSI/aligned_50.pkl
+INFO:root:bert_path: bert-base-uncased
+INFO:root:dropout_prj: 0.1
+INFO:root:multiseed: False
+INFO:root:d_prjh: 128
+INFO:root:TopK: 3
+INFO:root:rank: 32
+INFO:root:lora_rank: 32
+INFO:root:kernel_size: 3
+INFO:root:batch_size: 128
+INFO:root:clip: 1.0
+INFO:root:lr_main: 0.001
+INFO:root:lr_lora: 0.001
+INFO:root:lr_adapter: 0.001
+INFO:root:weight_decay_main: 0.0001
+INFO:root:weight_decay_lora: 0.0001
+INFO:root:weight_decay_adapter: 0.0001
+INFO:root:optim: AdamW
+INFO:root:audio_dim: 5
+INFO:root:vision_dim: 20
+INFO:root:num_epochs: 20
+INFO:root:patience: 10
+INFO:root:update_batch: 1
+INFO:root:when: 9
+INFO:root:start_fusion_layer: 0
+INFO:root:log_interval: 100
+INFO:root:seed: 7777
+INFO:root:--------args----------
+
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:root:Runing code on the mosi dataset.
+INFO:root:--------args----------
+INFO:root:dataset: mosi
+INFO:root:data_path: data/MOSI/aligned_50.pkl
+INFO:root:bert_path: bert-base-uncased
+INFO:root:dropout_prj: 0.1
+INFO:root:multiseed: False
+INFO:root:d_prjh: 128
+INFO:root:TopK: 3
+INFO:root:rank: 32
+INFO:root:lora_rank: 32
+INFO:root:kernel_size: 3
+INFO:root:batch_size: 128
+INFO:root:clip: 1.0
+INFO:root:lr_main: 0.001
+INFO:root:lr_lora: 0.001
+INFO:root:lr_adapter: 0.001
+INFO:root:weight_decay_main: 0.0001
+INFO:root:weight_decay_lora: 0.0001
+INFO:root:weight_decay_adapter: 0.0001
+INFO:root:optim: AdamW
+INFO:root:audio_dim: 5
+INFO:root:vision_dim: 20
+INFO:root:num_epochs: 20
+INFO:root:patience: 10
+INFO:root:update_batch: 1
+INFO:root:when: 9
+INFO:root:start_fusion_layer: 0
+INFO:root:log_interval: 100
+INFO:root:seed: 7777
+INFO:root:--------args----------
+
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:root:Runing code on the mosi dataset.
+INFO:root:--------args----------
+INFO:root:dataset: mosi
+INFO:root:data_path: data/MOSI/aligned_50.pkl
+INFO:root:bert_path: bert-base-uncased
+INFO:root:dropout_prj: 0.1
+INFO:root:multiseed: False
+INFO:root:d_prjh: 128
+INFO:root:TopK: 3
+INFO:root:rank: 32
+INFO:root:lora_rank: 32
+INFO:root:kernel_size: 3
+INFO:root:batch_size: 128
+INFO:root:clip: 1.0
+INFO:root:lr_main: 0.001
+INFO:root:lr_lora: 0.001
+INFO:root:lr_adapter: 0.001
+INFO:root:weight_decay_main: 0.0001
+INFO:root:weight_decay_lora: 0.0001
+INFO:root:weight_decay_adapter: 0.0001
+INFO:root:optim: AdamW
+INFO:root:audio_dim: 5
+INFO:root:vision_dim: 20
+INFO:root:num_epochs: 20
+INFO:root:patience: 10
+INFO:root:update_batch: 1
+INFO:root:when: 9
+INFO:root:start_fusion_layer: 0
+INFO:root:log_interval: 100
+INFO:root:seed: 7777
+INFO:root:--------args----------
+
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:root:Runing code on the mosi dataset.
+INFO:root:--------args----------
+INFO:root:dataset: mosi
+INFO:root:data_path: data/MOSI/aligned_50.pkl
+INFO:root:bert_path: bert-base-uncased
+INFO:root:dropout_prj: 0.1
+INFO:root:multiseed: False
+INFO:root:d_prjh: 128
+INFO:root:TopK: 3
+INFO:root:rank: 32
+INFO:root:lora_rank: 32
+INFO:root:kernel_size: 3
+INFO:root:batch_size: 128
+INFO:root:clip: 1.0
+INFO:root:lr_main: 0.001
+INFO:root:lr_lora: 0.001
+INFO:root:lr_adapter: 0.001
+INFO:root:weight_decay_main: 0.0001
+INFO:root:weight_decay_lora: 0.0001
+INFO:root:weight_decay_adapter: 0.0001
+INFO:root:optim: AdamW
+INFO:root:audio_dim: 5
+INFO:root:vision_dim: 20
+INFO:root:num_epochs: 20
+INFO:root:patience: 10
+INFO:root:update_batch: 1
+INFO:root:when: 9
+INFO:root:start_fusion_layer: 0
+INFO:root:log_interval: 100
+INFO:root:seed: 7777
+INFO:root:--------args----------
+
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:root:Runing code on the mosi dataset.
+INFO:root:--------args----------
+INFO:root:dataset: mosi
+INFO:root:data_path: data/MOSI/aligned_50.pkl
+INFO:root:bert_path: bert-base-uncased
+INFO:root:dropout_prj: 0.1
+INFO:root:multiseed: False
+INFO:root:d_prjh: 128
+INFO:root:TopK: 3
+INFO:root:rank: 32
+INFO:root:lora_rank: 32
+INFO:root:kernel_size: 3
+INFO:root:batch_size: 128
+INFO:root:clip: 1.0
+INFO:root:lr_main: 0.001
+INFO:root:lr_lora: 0.001
+INFO:root:lr_adapter: 0.001
+INFO:root:weight_decay_main: 0.0001
+INFO:root:weight_decay_lora: 0.0001
+INFO:root:weight_decay_adapter: 0.0001
+INFO:root:optim: AdamW
+INFO:root:audio_dim: 5
+INFO:root:vision_dim: 20
+INFO:root:num_epochs: 20
+INFO:root:patience: 10
+INFO:root:update_batch: 1
+INFO:root:when: 9
+INFO:root:start_fusion_layer: 0
+INFO:root:log_interval: 100
+INFO:root:seed: 7777
+INFO:root:--------args----------
+
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:root:Runing code on the mosi dataset.
+INFO:root:--------args----------
+INFO:root:dataset: mosi
+INFO:root:data_path: data/MOSI/aligned_50.pkl
+INFO:root:bert_path: bert-base-uncased
+INFO:root:dropout_prj: 0.1
+INFO:root:multiseed: False
+INFO:root:d_prjh: 128
+INFO:root:TopK: 3
+INFO:root:rank: 32
+INFO:root:lora_rank: 32
+INFO:root:kernel_size: 3
+INFO:root:batch_size: 128
+INFO:root:clip: 1.0
+INFO:root:lr_main: 0.001
+INFO:root:lr_lora: 0.001
+INFO:root:lr_adapter: 0.001
+INFO:root:weight_decay_main: 0.0001
+INFO:root:weight_decay_lora: 0.0001
+INFO:root:weight_decay_adapter: 0.0001
+INFO:root:optim: AdamW
+INFO:root:audio_dim: 5
+INFO:root:vision_dim: 20
+INFO:root:num_epochs: 20
+INFO:root:patience: 10
+INFO:root:update_batch: 1
+INFO:root:when: 9
+INFO:root:start_fusion_layer: 0
+INFO:root:log_interval: 100
+INFO:root:seed: 7777
+INFO:root:--------args----------
+
+INFO:MSA:train samples: (1284,)
+INFO:MSA:valid samples: (229,)
+INFO:MSA:test samples: (686,)
+INFO:root:Runing code on the mosi dataset.
+INFO:root:--------args----------
+INFO:root:dataset: mosi
+INFO:root:data_path: data/MOSI/aligned_50.pkl
+INFO:root:bert_path: bert-base-uncased
+INFO:root:dropout_prj: 0.1
+INFO:root:multiseed: False
+INFO:root:d_prjh: 128
+INFO:root:TopK: 3
+INFO:root:rank: 32
+INFO:root:lora_rank: 32
+INFO:root:kernel_size: 3
+INFO:root:batch_size: 128
+INFO:root:clip: 1.0
+INFO:root:lr_main: 0.001
+INFO:root:lr_lora: 0.001
+INFO:root:lr_adapter: 0.001
+INFO:root:weight_decay_main: 0.0001
+INFO:root:weight_decay_lora: 0.0001
+INFO:root:weight_decay_adapter: 0.0001
+INFO:root:optim: AdamW
+INFO:root:audio_dim: 5
+INFO:root:vision_dim: 20
+INFO:root:num_epochs: 20
+INFO:root:patience: 10
+INFO:root:update_batch: 1
+INFO:root:when: 9
+INFO:root:start_fusion_layer: 0
+INFO:root:log_interval: 100
+INFO:root:seed: 7777
+INFO:root:--------args----------
+
+INFO:root:epoch 1:
