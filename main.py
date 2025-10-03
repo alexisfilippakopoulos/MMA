@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # GPU
+#os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # GPU
 
 import torch
 import argparse
@@ -29,6 +29,7 @@ def set_seed(seed):
 if __name__ == '__main__':
     args = get_args()
     dataset = str.lower(args.dataset.strip())  
+    print("MAIIIIIIIIN", torch.cuda.is_available())
     
     set_seed(args.seed)
     print("Start loading the data....")
