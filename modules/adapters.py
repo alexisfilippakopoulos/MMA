@@ -1,11 +1,26 @@
+"""
+adapters.py
+
+This module implements adapter layers for the Mixture of Multimodal Adapters (MMA) architecture, which is designed for sentiment analysis using multimodal inputs. The adapter layers facilitate efficient parameter tuning by introducing bottleneck layers and learnable scalars, allowing the model to adapt to various tasks without requiring extensive retraining.
+
+Classes:
+- Adapter_Layer: This class defines an adapter layer that consists of a down-projection, a non-linear activation function, and an up-projection. It supports layer normalization and learnable scaling, enabling the model to effectively learn task-specific representations while maintaining the original input dimensions.
+
+Functions:
+- init_bert_weights: A utility function to initialize the weights of the adapter layers according to the BERT initialization strategy. This function ensures that the model starts with appropriate weight distributions, which can enhance convergence during training.
+
+Usage:
+The adapter layers can be integrated into the MMA architecture to improve performance on multimodal sentiment analysis tasks. By utilizing these layers, the model can efficiently learn from diverse data sources, including text, audio, and visual inputs, while minimizing the number of trainable parameters.
+
+"""
 import torch
 import torch.nn.functional as F
 import math
 from torch import nn
+
 def init_bert_weights(module):
-    """Initialize the weights."""
+    """Initialize the weights of the module according to BERT's initialization strategy."""
     if isinstance(module, (nn.Linear, nn.Embedding)):
-        # std defaults to 0.02, this might need to be changed
         module.weight.data.normal_(mean=0.0, std=0.02)
     elif isinstance(module, nn.LayerNorm):
         module.bias.data.zero_()
@@ -14,6 +29,22 @@ def init_bert_weights(module):
         module.bias.data.zero_()
 
 class Adapter_Layer(nn.Module):
+    """
+    Adapter Layer for the MMA architecture.
+
+    This layer introduces a bottleneck structure to facilitate efficient parameter tuning.
+    It consists of a down-projection, a non-linear activation function, and an up-projection.
+    The layer supports learnable scaling and optional layer normalization.
+
+    Args:
+        config: Configuration object containing model parameters.
+        d_model (int): Dimension of the input embeddings (default: 768).
+        bottleneck (int): Dimension of the bottleneck layer (default: 64).
+        dropout (float): Dropout probability (default: 0.2).
+        init_option (str): Initialization strategy for the weights (default: "bert").
+        adapter_scalar (str): Type of scaling for the adapter (default: "learnable_scalar").
+        adapter_layernorm_option (str): Layer normalization option (default: "in").
+    """
     def __init__(self,
                  config=None,
                  d_model=768,
@@ -27,9 +58,7 @@ class Adapter_Layer(nn.Module):
         self.down_size = config.attn_bn if bottleneck is None else bottleneck
         self.ca_heads = 4
         self.pivot_dim = self.down_size
-        # self.non_linearity = args.non_linearity  # use ReLU by default
 
-        #_before
         self.adapter_layernorm_option = adapter_layernorm_option
 
         self.adapter_layer_norm_before = None
@@ -56,6 +85,17 @@ class Adapter_Layer(nn.Module):
                 nn.init.zeros_(self.up_proj.bias)
 
     def forward(self, x, add_residual=False, residual=None):
+        """
+        Forward pass through the adapter layer.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, n_embd).
+            add_residual (bool): Whether to add the residual connection (default: False).
+            residual (torch.Tensor): Residual tensor to add (default: None).
+
+        Returns:
+            torch.Tensor: Output tensor after applying the adapter layer.
+        """
         residual = x if residual is None else residual
         if self.adapter_layernorm_option == 'in':
             x = self.adapter_layer_norm_before(x)
@@ -78,6 +118,16 @@ class Adapter_Layer(nn.Module):
         return output
 
 class NoParamMultiHeadAttention(nn.Module):
+    """
+    Multi-head attention mechanism without learnable parameters.
+
+    This class implements a multi-head attention mechanism that does not require additional parameters,
+    making it suitable for lightweight models. It performs scaled dot-product attention across multiple heads.
+
+    Args:
+        num_heads (int): Number of attention heads (default: 12).
+        embed_size (int): Dimension of the input embeddings (default: 768).
+    """
     def __init__(self, num_heads=12, embed_size=768):
         super(NoParamMultiHeadAttention, self).__init__()
         self.num_heads = num_heads
@@ -89,23 +139,31 @@ class NoParamMultiHeadAttention(nn.Module):
         ), "Embedding size needs to be divisible by num_heads"
 
     def forward(self, queries, values, keys, mask=None):
+        """
+        Forward pass through the multi-head attention mechanism.
+
+        Args:
+            queries (torch.Tensor): Query tensor of shape (batch_size, query_len, embed_size).
+            values (torch.Tensor): Value tensor of shape (batch_size, value_len, embed_size).
+            keys (torch.Tensor): Key tensor of shape (batch_size, key_len, embed_size).
+            mask (torch.Tensor, optional): Mask tensor for attention scores (default: None).
+
+        Returns:
+            torch.Tensor: Output tensor after applying multi-head attention.
+        """
         N = queries.shape[0]
         value_len, key_len, query_len = values.shape[1], keys.shape[1], queries.shape[1]
 
-        # Split the embedding into self.num_heads different pieces
-        # print(values.shape)
         values = values.reshape(N, value_len, self.num_heads, self.head_dim)
         keys = keys.reshape(N, key_len, self.num_heads, self.head_dim)
         queries = queries.reshape(N, query_len, self.num_heads, self.head_dim)
 
-        # Perform scaled dot-product attention on each head
         attention_scores = torch.einsum("nqhd,nkhd->nhqk", [queries, keys])
         attention_scores = attention_scores / (self.embed_size ** (1/2))
 
         if mask is not None:
             mask = mask.unsqueeze(1).unsqueeze(2)
             attention_scores = attention_scores.masked_fill(mask == 0, float("-1e20"))
-            # print(attention_scores.shape)
 
         attention = torch.softmax(attention_scores, dim=-1)
 

@@ -114,6 +114,19 @@ class BertEmbeddings(nn.Module):
         inputs_embeds: Optional[torch.FloatTensor] = None,
         past_key_values_length: int = 0,
     ) -> torch.Tensor:
+        """
+        Forward pass for the embedding layer.
+
+        Args:
+            input_ids (torch.LongTensor, optional): Input token IDs.
+            token_type_ids (torch.LongTensor, optional): Token type IDs for segment embeddings.
+            position_ids (torch.LongTensor, optional): Positional IDs.
+            inputs_embeds (torch.FloatTensor, optional): Pre-computed input embeddings.
+            past_key_values_length (int, optional): Length of past key values for incremental decoding. Defaults to 0.
+
+        Returns:
+            torch.Tensor: The combined embeddings.
+        """
         if input_ids is not None:
             input_shape = input_ids.size()
         else:
@@ -149,6 +162,12 @@ class BertEmbeddings(nn.Module):
 
 
 class BertSelfAttention(nn.Module):
+    """
+    Standard BERT self-attention mechanism.
+
+    This module computes scaled dot-product attention with multiple heads. It includes
+    linear projections for query, key, and value, and supports relative positional embeddings.
+    """
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -283,6 +302,12 @@ class BertSelfAttention(nn.Module):
 
 
 class BertSelfOutput(nn.Module):
+    """
+    The output sub-layer for the BERT self-attention mechanism.
+
+    It applies a dense layer, dropout, and a residual connection with layer normalization
+    to the output of the self-attention module.
+    """
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
@@ -297,6 +322,9 @@ class BertSelfOutput(nn.Module):
 
 
 class BertAttention(nn.Module):
+    """
+    A complete BERT attention block, combining self-attention and self-output sub-layers.
+    """
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
         self.self = BertSelfAttention(config, position_embedding_type=position_embedding_type)
@@ -346,6 +374,10 @@ class BertAttention(nn.Module):
 
 
 class BertIntermediate(nn.Module):
+    """
+    The intermediate feed-forward layer in a BERT transformer block.
+    It consists of a single dense layer followed by a non-linear activation function.
+    """
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
@@ -361,6 +393,10 @@ class BertIntermediate(nn.Module):
 
 
 class BertOutput(nn.Module):
+    """
+    The output layer of the feed-forward network in a BERT transformer block.
+    It applies a dense layer, dropout, and a residual connection with layer normalization.
+    """
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
@@ -372,12 +408,30 @@ class BertOutput(nn.Module):
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
+    
+
 from modules.loss import Load_Balancing_loss
 from modules.adapters import NoParamMultiHeadAttention
 from modules.loss import Load_Balancing_loss
 from modules.encoders import RouterSelfAttention, RouterPFSelfAttention, RouterPFMultiHeadAttention
+
+
 class XBertLayer(nn.Module):
+    """
+    A modified BERT layer that incorporates the Mixture of Multimodal Adapters (MMA).
+
+    This layer extends a standard BERT transformer layer with mechanisms for multimodal
+    fusion. It performs token-level fusion via cross-attention and channel-level fusion
+    using a mixture of modality-specific experts (adapters) controlled by a router.
+    """
     def __init__(self, config, add_adapter=True):
+        """
+        Initializes the XBertLayer.
+
+        Args:
+            config (BertConfig): The configuration object for the model.
+            add_adapter (bool, optional): If True, multimodal adapters are added to this layer. Defaults to True.
+        """
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
@@ -432,6 +486,29 @@ class XBertLayer(nn.Module):
         vision_length = None,
         audio_length = None
     ) -> Tuple[torch.Tensor]:
+        """
+        Forward pass for the XBertLayer.
+
+        Args:
+            hidden_states (torch.Tensor): Input text hidden states.
+            attention_mask (torch.FloatTensor, optional): Mask for self-attention.
+            head_mask (torch.FloatTensor, optional): Mask for attention heads.
+            encoder_hidden_states (torch.FloatTensor, optional): Not used in this implementation.
+            encoder_attention_mask (torch.FloatTensor, optional): Not used in this implementation.
+            past_key_value (Tuple, optional): Cached key-value states for attention.
+            output_attentions (bool, optional): Whether to return attention weights.
+            vision (torch.Tensor, optional): Vision feature tensor.
+            audio (torch.Tensor, optional): Audio feature tensor.
+            vision_length: Not used.
+            audio_length: Not used.
+
+        Returns:
+            Tuple[torch.Tensor]: A tuple containing:
+                - The output hidden states of the layer.
+                - The load balancing loss for the adapter routing.
+                - The expert distribution frequency.
+                - Optional attention outputs.
+        """
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
         self_attention_outputs = self.attention(
@@ -449,9 +526,10 @@ class XBertLayer(nn.Module):
             key_padding_mask = attention_mask.squeeze()
             key_padding_mask = torch.where(key_padding_mask == 0, torch.tensor(1), key_padding_mask)
             key_padding_mask = torch.where(key_padding_mask != 1, torch.tensor(0), key_padding_mask)
+            # Audio/Visual Features After Conv1D proj
             audio_hat = self.adapter_conv_audio(audio.permute(0,2,1)).permute(0,2,1)
             vision_hat = self.adapter_conv_vision(vision.permute(0,2,1)).permute(0,2,1)
-            
+            # Audio/Visual features cross attention with text features
             audio_t = self.text_audio_atten(queries=attention_output,keys=audio_hat,values=audio_hat,mask=key_padding_mask[:,:audio_hat.shape[1]])
             vision_t = self.text_vision_atten(queries=attention_output,keys=vision_hat,values=vision_hat,mask=key_padding_mask[:,:vision_hat.shape[1]])
             
@@ -520,11 +598,26 @@ class XBertLayer(nn.Module):
         return outputs, lb_loss, f
 
     def feed_forward_chunk(self, attention_output):
+        """
+        Processes the attention output through the feed-forward network in chunks.
+
+        Args:
+            attention_output (torch.Tensor): The output from the attention mechanism.
+
+        Returns:
+            torch.Tensor: The output of the feed-forward network.
+        """
         intermediate_output = self.intermediate(attention_output)
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
 
 class BertEncoder(nn.Module):
+    """
+    The BERT encoder, composed of a stack of `XBertLayer` layers.
+
+    This module iteratively processes the input sequence through multiple `XBertLayer`
+    layers, allowing for deep fusion of multimodal information when adapters are enabled.
+    """
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -550,6 +643,29 @@ class BertEncoder(nn.Module):
         vision_length = None,
         audio_length = None
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPastAndCrossAttentions]:
+        """
+        Forward pass for the BertEncoder.
+
+        Args:
+            hidden_states (torch.Tensor): Input sequence embeddings.
+            attention_mask (torch.FloatTensor, optional): Attention mask for the input sequence.
+            head_mask (torch.FloatTensor, optional): Mask for attention heads.
+            encoder_hidden_states (torch.FloatTensor, optional): Not used.
+            encoder_attention_mask (torch.FloatTensor, optional): Not used.
+            past_key_values (Tuple, optional): Cached attention states.
+            use_cache (bool, optional): Whether to use and return cached states.
+            output_attentions (bool, optional): Whether to return all self-attention weights.
+            output_hidden_states (bool, optional): Whether to return all hidden states.
+            return_dict (bool, optional): Whether to return a `ModelOutput` object.
+            vision (torch.Tensor, optional): Vision feature tensor, passed to each `XBertLayer`.
+            audio (torch.Tensor, optional): Audio feature tensor, passed to each `XBertLayer`.
+            vision_length: Not used.
+            audio_length: Not used.
+
+        Returns:
+            Union[Tuple[torch.Tensor], BaseModelOutputWithPastAndCrossAttentions]: The encoder's output,
+            including the final hidden state, total load balancing loss, and expert frequencies.
+        """
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
         all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
@@ -617,6 +733,12 @@ class BertEncoder(nn.Module):
 
 
 class BertPooler(nn.Module):
+    """
+    Pools the model output by taking the hidden state of the first token ([CLS]).
+
+    This is a standard component in BERT for sentence-level classification tasks.
+    It applies a linear layer and a Tanh activation function to the [CLS] token's representation.
+    """
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
@@ -632,6 +754,11 @@ class BertPooler(nn.Module):
 
 
 class BertPredictionHeadTransform(nn.Module):
+    """
+    A transformation layer used in the BERT prediction head (e.g., for masked language modeling).
+
+    It consists of a dense layer, an activation function, and layer normalization.
+    """
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
