@@ -419,3 +419,178 @@ class GlobalTemporalExpert(nn.Module):
                 output = up
 
             return output
+        
+class SynchronyExpert(nn.Module):
+    def __init__(self, config, d_model=768,
+                 bottleneck=64, dropout=0.2, 
+                 temporal_window=7,
+                 init_option="bert", 
+                 adapter_scalar="learnable_scalar", 
+                 adapter_layernorm_option="in"):
+        super().__init__()
+        self.n_embd = config.d_model if d_model is None and config is not None else d_model
+        self.down_size = config.attn_bn if bottleneck is None and config is not None else bottleneck
+        self.dropout = dropout
+        self.temporal_window = temporal_window
+
+        # layer norm (optional)
+        self.adapter_layernorm_option = adapter_layernorm_option
+        self.adapter_layer_norm_before = None
+        if adapter_layernorm_option in ["in", "out"]:
+            self.adapter_layer_norm_before = nn.LayerNorm(self.n_embd)
+
+        # scaling
+        if adapter_scalar == "learnable_scalar":
+            self.scale = nn.Parameter(torch.ones(1))
+        else:
+            self.scale = float(adapter_scalar)
+
+        # unimodal down-projections
+        self.down_proj_audio = nn.Linear(self.n_embd, self.down_size)
+        self.down_proj_video = nn.Linear(self.n_embd, self.down_size)
+        self.non_linear_func = nn.ReLU()
+
+        # temporal cross attn
+        self.W_q_audio = nn.Linear(self.down_size, self.down_size, bias=False)
+        self.W_k_video = nn.Linear(self.down_size, self.down_size, bias=False)
+        self.W_v_video = nn.Linear(self.down_size, self.down_size, bias=False)
+
+        self.proximity_bias = nn.Parameter(torch.zeros(2 * temporal_window + 1))
+
+        # sync fusion
+        self.W_1_fusion = nn.Linear(2 * self.down_size, self.down_size)
+        self.W_2_fusion = nn.Linear(self.down_size, self.down_size)
+        self.fusion_layer_norm = nn.LayerNorm(2 * self.down_size)
+
+        # text alignment
+        self.W_q_align = nn.Linear(self.n_embd, self.down_size, bias=False)
+        self.W_k_align = nn.Linear(self.down_size, self.down_size, bias=False)
+        self.W_v_align = nn.Linear(self.down_size, self.down_size, bias=False)
+
+        self.up_proj = nn.Linear(self.down_size, self.n_embd)
+
+        self.attn_dropout = nn.Dropout(p=dropout)
+
+        # weight initialization
+        if init_option == "bert":
+            self.apply(init_bert_weights)
+        elif init_option == "lora":
+            with torch.no_grad():
+                nn.init.kaiming_uniform_(self.down_proj_video.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.down_proj_video.bias)
+                nn.init.kaiming_uniform_(self.down_proj_audio.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.down_proj_audio.bias)
+
+                nn.init.kaiming_uniform_(self.W_Q_audio.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_K_video.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_V_video.weight, a=math.sqrt(5))
+
+                nn.init.zeros_(self.proximity_bias)
+
+                nn.init.kaiming_uniform_(self.W_1_fusion.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.W_1_fusion.bias)
+                nn.init.kaiming_uniform_(self.W_2_fusion.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.W_2_fusion.bias)
+
+                nn.init.kaiming_uniform_(self.W_Q_align.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_K_align.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_V_align.weight, a=math.sqrt(5))
+
+                nn.init.zeros_(self.up_proj.weight)
+                nn.init.zeros_(self.up_proj.bias)
+
+
+    def get_proximity_bias(self, L_a, L_v, device):
+        audio_positions = torch.arange(L_a, device=device).float()
+        video_positions = torch.arange(L_v, device=device).float()
+
+        # scale audio positions to video frame rate
+        audio_in_video_scale = audio_positions.unsqueeze(1) * (L_v / L_a)
+        video_positions_expanded = video_positions.unsqueeze(0)
+
+        # temporal distance |i - j| 
+        temporal_distance = torch.abs(audio_in_video_scale - video_positions_expanded)
+        temporal_distance_int = torch.floor(temporal_distance).long()
+
+        # bias matrix init with -inf (outside window)
+        bias = torch.full((L_a, L_v), float('-inf'), device=device)
+
+        # for positions within window, use learnable bias
+        within_window = temporal_distance_int <= self.temporal_window
+        
+        # clamp  [0, 2w]
+        clamped_indices = torch.clamp(temporal_distance_int, 0, 2 * self.temporal_window)
+        
+        # apply learnable bias
+        bias[within_window] = self.temporal_bias[clamped_indices[within_window]]
+
+        return bias
+        
+
+    def forward(self, x_text, video_features, audio_features, 
+                add_residual=False, residual=None):
+        
+        batch_size, L_t, _ = x_text.shape
+        _, L_v, _ = video_features.shape
+        _, L_a, _ = audio_features.shape
+
+        residual = x_text if residual is None else residual
+        
+        # optional pre-layernorm on text input
+        if self.adapter_layernorm_option == "in":
+            x_text = self.adapter_layer_norm_before(x_text)
+
+        # unimodal down-projections
+        H_v = self.down_proj_video(video_features)
+        H_v = self.non_linear_func(H_v)
+
+        H_a = self.down_proj_audio(audio_features)
+        H_a = self.non_linear_func(H_a)
+
+        # cross-modal temporal attn
+        Q_a = self.W_q_audio(H_a)
+        K_v = self.W_k_video(H_v)
+        V_v = self.W_v_video(H_v)
+
+        attn_scores = torch.matmul(Q_a, K_v.transpose(-2, -1)) / math.sqrt(self.down_size)
+        proximity_bias = self.get_proximity_bias(L_a, L_v, x_text.device)
+        attn_scores = attn_scores + proximity_bias.unsqueeze(0)
+
+        A = F.softmax(attn_scores, dim=-1)
+        A = self.attn_dropout(A)
+        H_v_tilde = torch.matmul(A, V_v)
+
+        # sync fusion
+        H_av = torch.cat([H_a, H_v_tilde], dim=-1)
+        H_av_norm = self.fusion_layer_norm(H_av)
+        H_fused = self.W_1_fusion(H_av_norm)
+        H_fused = self.non_linear_func(H_fused)
+        H_sync = self.W_2_fusion(H_fused)
+
+        # text alignment
+        Q_text = self.W_q_align(x_text)
+        K_sync = self.W_k_align(H_sync)
+        V_sync = self.W_v_align(H_sync)
+
+        align_scores = torch.matmul(Q_text, K_sync.transpose(-2, -1)) / math.sqrt(self.down_size)
+        A_align = F.softmax(align_scores, dim=-1)
+        A_align = self.attn_dropout(A_align)
+        H_align = torch.matmul(A_align, V_sync)
+
+        # up-projection
+        up = self.up_proj(H_align)
+        up = up * self.scale
+
+        # optional post-layernorm
+        if self.adapter_layernorm_option == "out":
+            up = self.adapter_layer_norm_before(up)
+
+        if add_residual:
+            output = up + residual
+        else:
+            output = up
+
+        return output
+
+
+        
