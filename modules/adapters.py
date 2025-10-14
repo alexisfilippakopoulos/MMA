@@ -248,7 +248,6 @@ class LocalTemporalExpert(nn.Module):
         H = self.down_proj(x)  # (batch_size, seq_len, down_size)
         H = self.non_linear_func(H)
 
-        # Temporal convolution
         # (batch, seq_len, channels) -> (batch, channels, seq_len)
         H_t = H.transpose(1, 2)
         
@@ -262,7 +261,7 @@ class LocalTemporalExpert(nn.Module):
         # transpose back: (batch, channels, seq_len) -> (batch, seq_len, channels)
         H_temp = H_temp_t.transpose(1, 2)
 
-        # temporal gating: G_m^(l,n) = σ(W_g,m^(l,n) H_m^(l,n))
+        # temporal gating
         G = torch.sigmoid(self.gate_proj(H))  # (batch_size, seq_len, down_size)
         
         # gated combination
@@ -282,3 +281,141 @@ class LocalTemporalExpert(nn.Module):
             output = up
 
         return output
+    
+class GlobalTemporalExpert(nn.Module):
+    def __init__(self, config, d_model=768,
+                 bottleneck=64, dropout=0.2, 
+                 num_heads=4, max_relative_position=32,
+                 init_option="bert",
+                 adapter_scalar="learnable_scalar", 
+                 adapter_layernorm_option="in"):
+        super().__init__()
+        self.n_embd = config.d_model if d_model is None and config is not None else d_model
+        self.down_size = config.attn_bn if bottleneck is None and config is not None else bottleneck
+        self.dropout = dropout
+        self.num_heads = num_heads
+        self.max_relative_position = max_relative_position
+    
+        assert self.down_size % self.num_heads == 0
+        self.head_dim = self.down_size // self.num_heads
+        # layer norm (optional)
+        self.adapter_layernorm_option = adapter_layernorm_option
+        self.adapter_layer_norm_before = None
+        if adapter_layernorm_option in ["in", "out"]:
+            self.adapter_layer_norm_before = nn.LayerNorm(self.n_embd)
+
+        # scaling
+        if adapter_scalar == "learnable_scalar":
+            self.scale = nn.Parameter(torch.ones(1))
+        else:
+            self.scale = float(adapter_scalar)
+        
+        # down-projection
+        self.down_proj = nn.Linear(self.n_embd, self.down_size)
+        self.non_linear_func = nn.ReLU()
+        
+        # up-projection
+        self.up_proj = nn.Linear(self.down_size, self.n_embd)
+
+        # multi-head attn projections 
+        self.W_q = nn.Linear(self.down_size, self.down_size, bias=False)
+        self.W_k = nn.Linear(self.down_size, self.down_size, bias=False)
+        self.W_v = nn.Linear(self.down_size, self.down_size, bias=False)
+        self.W_o = nn.Linear(self.down_size, self.down_size, bias=False)
+
+        # relative position bias
+        self.relative_pos_bias = nn.Parameter(torch.zeros((num_heads, 2 * max_relative_position + 1)))
+
+        self.attn_dropout = nn.Dropout(p=dropout)
+        self.output_dropout = nn.Dropout(p=dropout)
+
+        # Weight initialization
+        if init_option == "bert":
+            self.apply(init_bert_weights)
+        elif init_option == "lora":
+            with torch.no_grad():
+                nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.down_proj.bias)
+                
+                nn.init.kaiming_uniform_(self.W_Q.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_K.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_V.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_O.weight, a=math.sqrt(5))
+                
+                nn.init.zeros_(self.up_proj.weight)
+                nn.init.zeros_(self.up_proj.bias)
+                
+                nn.init.zeros_(self.relative_position_bias)
+
+        def get_relative_position_bias(self, seq_len, device):
+            positions = torch.arange(seq_len, device=device)
+            relative_positions = positions.unsqueeze(0) - positions.unsqueeze(1)
+            # clip(i-j, -L_max, L_max)
+            relative_positions = torch.clamp(relative_positions, -self.max_relative_position, self.max_relative_position)
+            # shift by L_max
+            relative_positions_indices = relative_positions + self.max_relative_position
+            bias = self.relative_pos_bias[:, relative_positions_indices]
+            return bias
+        
+        def forward(self, x, add_residual=False, residual=None, attention_mask=None):
+            batch_size, seq_len, _ = x.shape
+            residual = x if residual is None else residual
+
+            # optional pre-layernorm
+            if self.adapter_layernorm_option == "in":
+                x = self.adapter_layer_norm_before(x)
+
+            # down proj
+            H = self.down_proj(x)
+            H = self.non_linear_func(H)
+
+            # attn projections
+            Q = self.W_q(H)
+            K = self.W_k(H)
+            V = self.W_v(H)
+            
+            # reshape for multi-head attention
+            Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            
+            attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.head_dim)
+
+            rel_pos_bias =  get_relative_position_bias(self, seq_len, x.device)
+            attn_scores = attn_scores + rel_pos_bias.unsqueeze(0)
+
+            # apply mask if provided
+            if attention_mask is not None:
+                if attention_mask.dim() == 2:
+                    # (batch_size, seq_len) -> (batch_size, 1, 1, seq_len)
+                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+                attn_scores = attn_scores.masked_fill(attention_mask == 0, float('-inf'))
+
+            attn_weights = F.softmax(attn_scores, dim=-1)
+            attn_weights = self.attn_dropout(attn_weights)
+            attn_output = torch.matmul((attn_weights), V)
+
+            # reshape back: (batch_size, seq_len, down_size)
+            attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.down_size)
+
+            # output projection
+            H_attn = self.W_O(attn_output)
+            H_attn = self.output_dropout(H_attn)
+            
+            # residual connection
+            H_tilde = H + H_attn
+            
+            # up-projection
+            up = self.up_proj(H_tilde)
+            up = up * self.scale
+
+            # optional post-layernorm
+            if self.adapter_layernorm_option == "out":
+                up = self.adapter_layer_norm_before(up)
+
+            if add_residual:
+                output = up + residual
+            else:
+                output = up
+
+            return output
