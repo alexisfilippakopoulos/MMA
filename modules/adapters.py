@@ -1,18 +1,3 @@
-"""
-adapters.py
-
-This module implements adapter layers for the Mixture of Multimodal Adapters (MMA) architecture, which is designed for sentiment analysis using multimodal inputs. The adapter layers facilitate efficient parameter tuning by introducing bottleneck layers and learnable scalars, allowing the model to adapt to various tasks without requiring extensive retraining.
-
-Classes:
-- Adapter_Layer: This class defines an adapter layer that consists of a down-projection, a non-linear activation function, and an up-projection. It supports layer normalization and learnable scaling, enabling the model to effectively learn task-specific representations while maintaining the original input dimensions.
-
-Functions:
-- init_bert_weights: A utility function to initialize the weights of the adapter layers according to the BERT initialization strategy. This function ensures that the model starts with appropriate weight distributions, which can enhance convergence during training.
-
-Usage:
-The adapter layers can be integrated into the MMA architecture to improve performance on multimodal sentiment analysis tasks. By utilizing these layers, the model can efficiently learn from diverse data sources, including text, audio, and visual inputs, while minimizing the number of trainable parameters.
-
-"""
 import torch
 import torch.nn.functional as F
 import math
@@ -170,3 +155,108 @@ class NoParamMultiHeadAttention(nn.Module):
         out = torch.einsum("nhql,nlhd->nqhd", [attention, values]).reshape(N, query_len, self.embed_size)
 
         return out
+    
+
+    class LocalTemporalExpert:
+        def __init__(self, config, d_model=768,
+                     bottleneck=64, dropout=0.2, 
+                     init_option="bert", kernel_size=5,
+                     dilation=2, 
+                     adapter_scalar="learnable_scalar", 
+                     adapter_layernorm_option="in"):
+            super().__init__()
+            self.n_embd = config.d_model if d_model is None and config is not None else d_model
+            self.down_size = config.attn_bn if bottleneck is None and config is not None else bottleneck
+            self.dropout = dropout
+            self.kernel_size = kernel_size
+            self.dilation = dilation
+
+            # layer norm (optional)
+            self.adapter_layernorm_option = adapter_layernorm_option
+            self.adapter_layer_norm_before = None
+            if adapter_layernorm_option in ["in", "out"]:
+                self.adapter_layer_norm_before = nn.LayerNorm(self.n_embd)
+
+            # Scaling
+            if adapter_scalar == "learnable_scalar":
+                self.scale = nn.Parameter(torch.ones(1))
+            else:
+                self.scale = float(adapter_scalar)
+            
+            self.down_proj = nn.Linear(self.n_embd, self.down_size)
+            self.non_linear_func = nn.ReLU()
+            self.up_proj = nn.Linear(self.down_size, self.n_embd)
+
+            padding = (kernel_size // 2) * dilation
+            # depthwise convolution: one filter per channel
+            self.depthwise_conv = nn.Conv1d(
+                in_channels=self.down_size,
+                out_channels=self.down_size,
+                kernel_size=kernel_size,
+                groups=self.down_size,
+                padding=padding,
+                dilation=dilation
+            )
+            # pointwise convolution: mixes across channels
+            self.pointwise_conv = nn.Conv1d(
+                in_channels=self.down_size,
+                out_channels=self.down_size,
+                kernel_size=1
+            )
+
+            # weight initialization
+            if init_option == "bert":
+                self.apply(init_bert_weights)
+            elif init_option == "lora":
+                with torch.no_grad():
+                    nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+                    nn.init.zeros_(self.up_proj.weight)
+                    nn.init.zeros_(self.down_proj.bias)
+                    nn.init.zeros_(self.up_proj.bias)
+                    nn.init.kaiming_uniform_(self.depthwise_conv.weight, a=math.sqrt(5))
+                    nn.init.zeros_(self.depthwise_conv.bias)
+                    nn.init.kaiming_uniform_(self.pointwise_conv.weight, a=math.sqrt(5))
+                    nn.init.zeros_(self.pointwise_conv.bias)
+            
+        def forward(self, x, add_residual=False, residual=None):
+            """
+            Args:
+                x: (batch_size, seq_len, d_model)
+                add_residual: whether to add residual connection
+                residual: optional residual tensor
+            Returns:
+                Tensor of shape (batch_size, seq_len, d_model)
+            """
+            residual = x if residual is None else residual
+
+            # optional pre-layernorm
+            if self.adapter_layernorm_option == "in":
+                x = self.adapter_layer_norm_before(x)
+
+            # down-project + activation
+            down = self.down_proj(x)
+            down = self.non_linear_func(down)
+
+            # depthwise separable convolution
+            down_t = down.transpose(1, 2)  
+            down_t = self.depthwise_conv(down_t)
+            down_t = F.relu(down_t)
+            down_t = self.pointwise_conv(down_t)
+            down_t = F.relu(down_t)
+            down_t = F.dropout(down_t, p=self.dropout, training=self.training)
+            down = down_t.transpose(1, 2)  
+
+            # up-projection + scaling
+            up = self.up_proj(down)
+            up = up * self.scale
+
+            # optional post-layernorm
+            if self.adapter_layernorm_option == "out":
+                up = self.adapter_layer_norm_before(up)
+
+            if add_residual:
+                output = up + residual
+            else:
+                output = up
+
+            return output

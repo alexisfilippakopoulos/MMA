@@ -106,6 +106,7 @@ class Solver(object):
                 audio = batch_data['audio']
                 text = batch_data['text']
                 y = batch_data['labels']['M']
+                print(f"Vision data shape: {vision.shape}, Audio data shape: {audio.shape}, Text data shape: {text.shape}, Label shape: {y.shape}")
                 
                 model.zero_grad()
                 with torch.cuda.device(0):
