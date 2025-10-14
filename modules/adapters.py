@@ -157,106 +157,128 @@ class NoParamMultiHeadAttention(nn.Module):
         return out
     
 
-    class LocalTemporalExpert:
-        def __init__(self, config, d_model=768,
-                     bottleneck=64, dropout=0.2, 
-                     init_option="bert", kernel_size=5,
-                     dilation=2, 
-                     adapter_scalar="learnable_scalar", 
-                     adapter_layernorm_option="in"):
-            super().__init__()
-            self.n_embd = config.d_model if d_model is None and config is not None else d_model
-            self.down_size = config.attn_bn if bottleneck is None and config is not None else bottleneck
-            self.dropout = dropout
-            self.kernel_size = kernel_size
-            self.dilation = dilation
+class LocalTemporalExpert(nn.Module):
+    def __init__(self, config, d_model=768,
+                 bottleneck=64, dropout=0.2, 
+                 init_option="bert", kernel_size=3,
+                 dilation=1, 
+                 adapter_scalar="learnable_scalar", 
+                 adapter_layernorm_option="in"):
+        super().__init__()
+        self.n_embd = config.d_model if d_model is None and config is not None else d_model
+        self.down_size = config.attn_bn if bottleneck is None and config is not None else bottleneck
+        self.dropout = dropout
+        self.kernel_size = kernel_size
+        self.dilation = dilation
 
-            # layer norm (optional)
-            self.adapter_layernorm_option = adapter_layernorm_option
-            self.adapter_layer_norm_before = None
-            if adapter_layernorm_option in ["in", "out"]:
-                self.adapter_layer_norm_before = nn.LayerNorm(self.n_embd)
+        # layer norm (optional)
+        self.adapter_layernorm_option = adapter_layernorm_option
+        self.adapter_layer_norm_before = None
+        if adapter_layernorm_option in ["in", "out"]:
+            self.adapter_layer_norm_before = nn.LayerNorm(self.n_embd)
 
-            # Scaling
-            if adapter_scalar == "learnable_scalar":
-                self.scale = nn.Parameter(torch.ones(1))
-            else:
-                self.scale = float(adapter_scalar)
-            
-            self.down_proj = nn.Linear(self.n_embd, self.down_size)
-            self.non_linear_func = nn.ReLU()
-            self.up_proj = nn.Linear(self.down_size, self.n_embd)
+        # scaling
+        if adapter_scalar == "learnable_scalar":
+            self.scale = nn.Parameter(torch.ones(1))
+        else:
+            self.scale = float(adapter_scalar)
+        
+        # down-projection
+        self.down_proj = nn.Linear(self.n_embd, self.down_size)
+        self.non_linear_func = nn.ReLU()
+        
+        # up-projection
+        self.up_proj = nn.Linear(self.down_size, self.n_embd)
 
-            padding = (kernel_size // 2) * dilation
-            # depthwise convolution: one filter per channel
-            self.depthwise_conv = nn.Conv1d(
-                in_channels=self.down_size,
-                out_channels=self.down_size,
-                kernel_size=kernel_size,
-                groups=self.down_size,
-                padding=padding,
-                dilation=dilation
-            )
-            # pointwise convolution: mixes across channels
-            self.pointwise_conv = nn.Conv1d(
-                in_channels=self.down_size,
-                out_channels=self.down_size,
-                kernel_size=1
-            )
+        # temporal convolution depthwise separable
+        padding = (kernel_size // 2) * dilation
+        
+        # depthwise convolution: one filter per channel
+        self.depthwise_conv = nn.Conv1d(
+            in_channels=self.down_size,
+            out_channels=self.down_size,
+            kernel_size=kernel_size,
+            groups=self.down_size,
+            padding=padding,
+            dilation=dilation
+        )
+        
+        # pointwise convolution: mixes across channels
+        self.pointwise_conv = nn.Conv1d(
+            in_channels=self.down_size,
+            out_channels=self.down_size,
+            kernel_size=1
+        )
 
-            # weight initialization
-            if init_option == "bert":
-                self.apply(init_bert_weights)
-            elif init_option == "lora":
-                with torch.no_grad():
-                    nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
-                    nn.init.zeros_(self.up_proj.weight)
-                    nn.init.zeros_(self.down_proj.bias)
-                    nn.init.zeros_(self.up_proj.bias)
-                    nn.init.kaiming_uniform_(self.depthwise_conv.weight, a=math.sqrt(5))
-                    nn.init.zeros_(self.depthwise_conv.bias)
-                    nn.init.kaiming_uniform_(self.pointwise_conv.weight, a=math.sqrt(5))
-                    nn.init.zeros_(self.pointwise_conv.bias)
-            
-        def forward(self, x, add_residual=False, residual=None):
-            """
-            Args:
-                x: (batch_size, seq_len, d_model)
-                add_residual: whether to add residual connection
-                residual: optional residual tensor
-            Returns:
-                Tensor of shape (batch_size, seq_len, d_model)
-            """
-            residual = x if residual is None else residual
+        # temporal gating
+        self.gate_proj = nn.Linear(self.down_size, self.down_size)
 
-            # optional pre-layernorm
-            if self.adapter_layernorm_option == "in":
-                x = self.adapter_layer_norm_before(x)
+        # weight initialization
+        if init_option == "bert":
+            self.apply(init_bert_weights)
+        elif init_option == "lora":
+            with torch.no_grad():
+                nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.up_proj.weight)
+                nn.init.zeros_(self.down_proj.bias)
+                nn.init.zeros_(self.up_proj.bias)
+                nn.init.kaiming_uniform_(self.depthwise_conv.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.depthwise_conv.bias)
+                nn.init.kaiming_uniform_(self.pointwise_conv.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.pointwise_conv.bias)
+                nn.init.kaiming_uniform_(self.gate_proj.weight, a=math.sqrt(5))
+                nn.init.zeros_(self.gate_proj.bias)
+        
+    def forward(self, x, add_residual=False, residual=None):
+        """
+        Args:
+            x: (batch_size, seq_len, d_model) - X_m^(l)
+            add_residual: whether to add residual connection
+            residual: optional residual tensor
+        Returns:
+            Tensor of shape (batch_size, seq_len, d_model) - E_m^(l,n)
+        """
+        residual = x if residual is None else residual
 
-            # down-project + activation
-            down = self.down_proj(x)
-            down = self.non_linear_func(down)
+        # optional pre-layernorm
+        if self.adapter_layernorm_option == "in":
+            x = self.adapter_layer_norm_before(x)
 
-            # depthwise separable convolution
-            down_t = down.transpose(1, 2)  
-            down_t = self.depthwise_conv(down_t)
-            down_t = F.relu(down_t)
-            down_t = self.pointwise_conv(down_t)
-            down_t = F.relu(down_t)
-            down_t = F.dropout(down_t, p=self.dropout, training=self.training)
-            down = down_t.transpose(1, 2)  
+        # down-projection 
+        H = self.down_proj(x)  # (batch_size, seq_len, down_size)
+        H = self.non_linear_func(H)
 
-            # up-projection + scaling
-            up = self.up_proj(down)
-            up = up * self.scale
+        # Temporal convolution
+        # (batch, seq_len, channels) -> (batch, channels, seq_len)
+        H_t = H.transpose(1, 2)
+        
+        # depthwise separable convolution
+        H_temp_t = self.depthwise_conv(H_t)
+        H_temp_t = F.relu(H_temp_t)
+        H_temp_t = self.pointwise_conv(H_temp_t)
+        H_temp_t = F.relu(H_temp_t)
+        H_temp_t = F.dropout(H_temp_t, p=self.dropout, training=self.training)
+        
+        # transpose back: (batch, channels, seq_len) -> (batch, seq_len, channels)
+        H_temp = H_temp_t.transpose(1, 2)
 
-            # optional post-layernorm
-            if self.adapter_layernorm_option == "out":
-                up = self.adapter_layer_norm_before(up)
+        # temporal gating: G_m^(l,n) = σ(W_g,m^(l,n) H_m^(l,n))
+        G = torch.sigmoid(self.gate_proj(H))  # (batch_size, seq_len, down_size)
+        
+        # gated combination
+        H_tilde = G * H_temp + (1 - G) * H
 
-            if add_residual:
-                output = up + residual
-            else:
-                output = up
+        # up-projection
+        up = self.up_proj(H_tilde)
+        up = up * self.scale
 
-            return output
+        # optional post-layernorm
+        if self.adapter_layernorm_option == "out":
+            up = self.adapter_layer_norm_before(up)
+
+        if add_residual:
+            output = up + residual
+        else:
+            output = up
+
+        return output
