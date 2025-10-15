@@ -44,6 +44,8 @@ class MMA_Bert(nn.Module):
         segment_ids: token_type_ids
         """
         input_ids, input_mask, segment_ids = text[:,0,:].long(), text[:,1,:].float(), text[:,2,:].long()
+        print("Eisodos sto XBert")
+        print(f"Input ids: {input_ids.shape}, input_mask: {input_mask.shape}, segment_ids: {segment_ids.shape}, vision: {vision.shape}, audio: {audio.shape}")
         last_hidden_states, LBLoss, ep_d = self.bert_model(input_ids=input_ids,
                                             attention_mask=input_mask,
                                             token_type_ids=segment_ids,

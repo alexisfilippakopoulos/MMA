@@ -509,6 +509,7 @@ class XBertLayer(nn.Module):
                 - The expert distribution frequency.
                 - Optional attention outputs.
         """
+        #print(f"Hidden states inside XBertLayer: {hidden_states.shape}")
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
         self_attention_outputs = self.attention(
@@ -519,6 +520,7 @@ class XBertLayer(nn.Module):
             past_key_value=self_attn_past_key_value,
         )
         attention_output = self_attention_outputs[0]
+        #print(f"Attn output sto xbert: {attention_output.shape}")
         #-----------------------------adapter_change----------token fusion--------------------#
         N = self.num_experts / 3
         if self.add_adapter == True:
@@ -528,26 +530,39 @@ class XBertLayer(nn.Module):
             key_padding_mask = torch.where(key_padding_mask != 1, torch.tensor(0), key_padding_mask)
             # Audio/Visual Features After Conv1D proj
             audio_hat = self.adapter_conv_audio(audio.permute(0,2,1)).permute(0,2,1)
+            #print("permuted audio hat", audio_hat.shape)
             vision_hat = self.adapter_conv_vision(vision.permute(0,2,1)).permute(0,2,1)
+            #print("permuted vision hat", vision_hat.shape)
             # Audio/Visual features cross attention with text features
             audio_t = self.text_audio_atten(queries=attention_output,keys=audio_hat,values=audio_hat,mask=key_padding_mask[:,:audio_hat.shape[1]])
             vision_t = self.text_vision_atten(queries=attention_output,keys=vision_hat,values=vision_hat,mask=key_padding_mask[:,:vision_hat.shape[1]])
-            
-
+    
              #-----------------------------adapter_change------------channel fusion------------------#
             topK=self.TopK
             N = self.num_experts // 3
-        
+
+            # every token position (across all sequences) is a separate sample of size [hidden_dim]
             batch_size, sequence_length, hidden_dim = attention_output.shape
             T = batch_size*sequence_length
             attention_output = attention_output.view(-1,hidden_dim)
             audio_t = audio_t.contiguous().view(-1,hidden_dim)
             vision_t = vision_t.contiguous().view(-1,hidden_dim)
-  
-            gate_logits = self.adapter_atten_gate(torch.stack((attention_output, audio_t+attention_output, vision_t+attention_output), dim=1)).view(-1, N*3)
+
+            #print("Meta to transpose", attention_output.shape, audio_t.shape, vision_t.shape)  # (bs*len, dim)
+            # per-token activation score for all experts
+            gate_logits = self.adapter_atten_gate(
+                torch.stack((attention_output, 
+                             audio_t + attention_output, 
+                             vision_t + attention_output), 
+                            dim=1)
+                        ).view(-1, N*3)
+            # per-token probabilities for each expert
             gate_p = F.softmax(gate_logits, dim=1, dtype=torch.float).to(attention_output.dtype)
+            #print("Gate P", gate_p.shape)  # (bs*len, num_experts)
             weights, selected_experts = torch.topk(gate_logits, topK)  # T, K
+            #print("Selected experts", selected_experts.shape, weights.shape)  # (bs*len, K)
             weights = F.softmax(weights, dim=1, dtype=torch.float).to(attention_output.dtype)
+            #print("Weights after norm", weights.shape)
             results = torch.zeros_like(attention_output)
 
             experts = nn.ModuleList([
@@ -563,14 +578,15 @@ class XBertLayer(nn.Module):
                 batch_idx, nth_expert = torch.where(selected_experts == i)
                 if i<N:
                     expert_output = expert(attention_output[batch_idx])
-                
-                # # print(expert_output.shape)
+                    #print("Text Expert", expert_output.shape)
                 elif i>(N-1) and i<2*N:
                     expert_output = expert(audio_t[batch_idx]+attention_output[batch_idx])
+                    #print("Audio Expert", expert_output.shape)
                 else:
                     expert_output = expert(vision_t[batch_idx]+attention_output[batch_idx])
+                    #print("Vision Expert", expert_output.shape)
                 results[batch_idx] += weights[batch_idx, nth_expert, None] * expert_output
-
+            
             attention_output = attention_output.reshape(batch_size, sequence_length, hidden_dim)
             results = results.reshape(batch_size, sequence_length, hidden_dim)
             results = (32/self.rank) * results
@@ -959,6 +975,7 @@ class XBertModel(BertPreTrainedModel):
             If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
             `past_key_values`).
         """
+        # validation of args and setup
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -998,6 +1015,7 @@ class XBertModel(BertPreTrainedModel):
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
+        # prevent attention to padding tokens
         extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape)
 
         # If a 2D or 3D attention mask is provided for the cross-attention
@@ -1018,6 +1036,7 @@ class XBertModel(BertPreTrainedModel):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
+        # word_embeddings + position_embeddings + token_type_embeddings → dropout → output
         embedding_output = self.embeddings(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -1025,6 +1044,8 @@ class XBertModel(BertPreTrainedModel):
             inputs_embeds=inputs_embeds,
             past_key_values_length=past_key_values_length,
         )
+        #print(f"Embedding output shape: {embedding_output.shape}")
+        # batch_size, seq_length, hidden_size].
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
