@@ -280,3 +280,113 @@ class TemporalAwareRouter(nn.Module):
 
         return gate_logits
 
+class TemporalStatisticalRouter(nn.Module):
+    """
+    Temporal-Aware Router using lightweight statistical temporal indicators.
+    
+    Theory: Router detects PRESENCE of temporal patterns via change metrics,
+    without actually processing temporal dependencies (that's the expert's job).
+    
+    Args:
+        embed_dim (int): Dimension of input embeddings (d_t)
+        num_experts (int): Total number of experts
+        stat_dim (int): Dimension for statistical features (default: 32)
+    """
+    def __init__(self, embed_dim=768, num_experts=6, stat_dim=32):
+        super(TemporalStatisticalRouter, self).__init__()  # Changed class name here
+        self.embed_dim = embed_dim
+        self.num_experts = num_experts
+        self.stat_dim = stat_dim
+        
+        # Lightweight projections for temporal statistics
+        # Each modality gets its own change detector
+        self.text_stat_proj = nn.Linear(embed_dim * 2, stat_dim)  # 768*2 → 32 = 49K
+        self.audio_stat_proj = nn.Linear(embed_dim * 2, stat_dim)
+        self.video_stat_proj = nn.Linear(embed_dim * 2, stat_dim)
+        
+        # Cross-modal alignment detector
+        self.alignment_proj = nn.Linear(embed_dim * 2, stat_dim)
+        
+        # Final routing projection
+        # Input: 3*embed_dim (spatial) + 4*stat_dim (temporal stats)
+        self.route_proj = nn.Linear(3 * embed_dim + 4 * stat_dim, num_experts)
+        
+        # Total params: 4*(768*2*32) + (3*768 + 4*32)*14 ≈ 230K
+
+    def compute_temporal_statistics(self, x):
+        """
+        Compute temporal change statistics without actual temporal modeling.
+        
+        Args:
+            x: (batch_size, seq_length, embed_dim)
+            
+        Returns:
+            stats: Dict with temporal indicators
+        """
+        batch_size, seq_length, embed_dim = x.shape
+        
+        # 1. First-order difference (local change indicator)
+        # Δ_i = x_i - x_{i-1}
+        x_shifted = torch.cat([x[:, :1, :], x[:, :-1, :]], dim=1)  # Prepend first token
+        delta = x - x_shifted  # (bs, seq_len, embed_dim)
+        
+        # 2. Concatenate change and current value
+        # This captures: "What is the token AND how much did it change?"
+        change_features = torch.cat([x, delta], dim=-1)  # (bs, seq_len, 2*embed_dim)
+        
+        return {
+            'change_features': change_features,
+            'delta': delta
+        }
+
+    def forward(self, x_text, x_au, x_vis):
+        """
+        Args:
+            x_text: (batch_size, seq_length, embed_dim)
+            x_au: (batch_size, seq_length, embed_dim)
+            x_vis: (batch_size, seq_length, embed_dim)
+            
+        Returns:
+            gate_logits: (batch_size*seq_length, num_experts)
+        """
+        batch_size, seq_length, _ = x_text.shape
+        
+        # ===== Compute Temporal Statistics (Indicators, not Processing) =====
+        
+        # Per-modality change detection
+        text_stats = self.compute_temporal_statistics(x_text)
+        audio_stats = self.compute_temporal_statistics(x_au)
+        video_stats = self.compute_temporal_statistics(x_vis)
+        
+        # Project change features to compact statistics
+        text_temporal = self.text_stat_proj(text_stats['change_features'])
+        audio_temporal = self.audio_stat_proj(audio_stats['change_features'])
+        video_temporal = self.video_stat_proj(video_stats['change_features'])
+        
+        # Cross-modal alignment indicator
+        # Compute difference between audio and video to detect misalignment
+        av_diff = x_au - x_vis
+        av_concat = torch.cat([x_au, av_diff], dim=-1)
+        alignment_indicator = self.alignment_proj(av_concat)
+        
+        # ===== Concatenate Spatial + Temporal Indicators =====
+        
+        # Spatial features (what content is present)
+        spatial = torch.cat([x_text, x_au, x_vis], dim=-1)  # (bs, seq_len, 3*embed_dim)
+        
+        # Temporal indicators (what patterns are present)
+        temporal = torch.cat([
+            text_temporal,      # Text change
+            audio_temporal,     # Audio change
+            video_temporal,     # Video change
+            alignment_indicator # Audio-visual alignment
+        ], dim=-1)  # (bs, seq_len, 4*stat_dim)
+        
+        # Combined features
+        features = torch.cat([spatial, temporal], dim=-1)
+        
+        # ===== Route to Experts =====
+        gate_logits = self.route_proj(features)  # (bs, seq_len, num_experts)
+        gate_logits = gate_logits.view(-1, self.num_experts)
+        
+        return gate_logits

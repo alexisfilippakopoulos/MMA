@@ -413,7 +413,7 @@ class BertOutput(nn.Module):
 from modules.loss import Load_Balancing_loss
 from modules.adapters import NoParamMultiHeadAttention
 from modules.loss import Load_Balancing_loss
-from modules.encoders import TemporalAwareRouter, RouterPFSelfAttention, RouterPFMultiHeadAttention
+from modules.encoders import TemporalAwareRouter, RouterPFSelfAttention, TemporalStatisticalRouter
 
 
 class XBertLayer(nn.Module):
