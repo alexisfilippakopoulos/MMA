@@ -413,7 +413,7 @@ class BertOutput(nn.Module):
 from modules.loss import Load_Balancing_loss
 from modules.adapters import NoParamMultiHeadAttention
 from modules.loss import Load_Balancing_loss
-from modules.encoders import RouterSelfAttention, RouterPFSelfAttention, RouterPFMultiHeadAttention
+from modules.encoders import TemporalAwareRouter, RouterPFSelfAttention, RouterPFMultiHeadAttention
 
 
 class XBertLayer(nn.Module):
@@ -461,16 +461,26 @@ class XBertLayer(nn.Module):
             self.rank = config.rank
         # self.alpha = config.alpha
             self.TopK = config.TopK
-            self.adapter_vision_1 = Adapter_Layer(bottleneck=self.rank)
+            """self.adapter_vision_1 = Adapter_Layer(bottleneck=self.rank)
             self.adapter_vision_2 = Adapter_Layer(bottleneck=self.rank)
         
             self.adapter_audio_1 = Adapter_Layer(bottleneck=self.rank)
             self.adapter_audio_2 = Adapter_Layer(bottleneck=self.rank) 
 
             self.adapter_1 = Adapter_Layer(bottleneck=self.rank)
-            self.adapter_2 = Adapter_Layer(bottleneck=self.rank)
+            self.adapter_2 = Adapter_Layer(bottleneck=self.rank)"""
+
+            self.txt_local_exp = LocalTemporalExpert(bottleneck=self.rank)
+            self.txt_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+
+            self.au_local_exp = LocalTemporalExpert(bottleneck=self.rank)
+            self.au_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+
+            self.vis_local_exp = LocalTemporalExpert(bottleneck=self.rank)
+            self.vis_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
         
             self.adapter_atten_gate = RouterPFSelfAttention()
+            self.temporal_adapter = TemporalAwareRouter(embed_dim=768, num_experts=self.num_experts, kernel_size=3)
 
     def forward(
         self,
@@ -519,21 +529,18 @@ class XBertLayer(nn.Module):
             output_attentions=output_attentions,
             past_key_value=self_attn_past_key_value,
         )
+        # bs x seq_len x d_model
         attention_output = self_attention_outputs[0]
-        #print(f"Attn output sto xbert: {attention_output.shape}")
         #-----------------------------adapter_change----------token fusion--------------------#
         N = self.num_experts / 3
         if self.add_adapter == True:
-            # print(attention_mask.shape)  # bs, 1, 1, len
             key_padding_mask = attention_mask.squeeze()
             key_padding_mask = torch.where(key_padding_mask == 0, torch.tensor(1), key_padding_mask)
             key_padding_mask = torch.where(key_padding_mask != 1, torch.tensor(0), key_padding_mask)
-            # Audio/Visual Features After Conv1D proj
+            # Audio/Visual Features After Conv1D proj (bs x L_a x d_model and (bs x L_v x d_model))
             audio_hat = self.adapter_conv_audio(audio.permute(0,2,1)).permute(0,2,1)
-            #print("permuted audio hat", audio_hat.shape)
             vision_hat = self.adapter_conv_vision(vision.permute(0,2,1)).permute(0,2,1)
-            #print("permuted vision hat", vision_hat.shape)
-            # Audio/Visual features cross attention with text features
+            # Audio/Visual features cross attention with text features (bs x L_t x d_model)
             audio_t = self.text_audio_atten(queries=attention_output,keys=audio_hat,values=audio_hat,mask=key_padding_mask[:,:audio_hat.shape[1]])
             vision_t = self.text_vision_atten(queries=attention_output,keys=vision_hat,values=vision_hat,mask=key_padding_mask[:,:vision_hat.shape[1]])
     
@@ -542,13 +549,15 @@ class XBertLayer(nn.Module):
             N = self.num_experts // 3
 
             # every token position (across all sequences) is a separate sample of size [hidden_dim]
-            batch_size, sequence_length, hidden_dim = attention_output.shape
+            """batch_size, sequence_length, hidden_dim = attention_output.shape
             T = batch_size*sequence_length
+            # bs * seq_len x d_model
             attention_output = attention_output.view(-1,hidden_dim)
             audio_t = audio_t.contiguous().view(-1,hidden_dim)
             vision_t = vision_t.contiguous().view(-1,hidden_dim)
-
             #print("Meta to transpose", attention_output.shape, audio_t.shape, vision_t.shape)  # (bs*len, dim)
+
+            
             # per-token activation score for all experts
             gate_logits = self.adapter_atten_gate(
                 torch.stack((attention_output, 
@@ -556,6 +565,7 @@ class XBertLayer(nn.Module):
                              vision_t + attention_output), 
                             dim=1)
                         ).view(-1, N*3)
+            gate_logits = self.temporal_adapter(attention_output, audio_t + attention_output, vision_t + attention_output)
             # per-token probabilities for each expert
             gate_p = F.softmax(gate_logits, dim=1, dtype=torch.float).to(attention_output.dtype)
             #print("Gate P", gate_p.shape)  # (bs*len, num_experts)
@@ -566,9 +576,9 @@ class XBertLayer(nn.Module):
             results = torch.zeros_like(attention_output)
 
             experts = nn.ModuleList([
-                                 self.adapter_1,self.adapter_2,
-                                 self.adapter_audio_1,self.adapter_audio_2,
-                                 self.adapter_vision_1,self.adapter_vision_2,
+                                 self.txt_local_exp, self.txt_global_exp,
+                                 self.au_local_exp, self.au_global_exp,
+                                 self.vis_local_exp, self.vis_global_exp,
                                  ])
             f = torch.zeros(N*3)
             P = torch.zeros(N*3)
@@ -589,7 +599,63 @@ class XBertLayer(nn.Module):
             
             attention_output = attention_output.reshape(batch_size, sequence_length, hidden_dim)
             results = results.reshape(batch_size, sequence_length, hidden_dim)
-            results = (32/self.rank) * results
+            results = (32/self.rank) * results"""
+
+            batch_size, sequence_length, hidden_dim = attention_output.shape
+            T = batch_size * sequence_length
+
+            # routing scores
+            gate_logits = self.temporal_adapter(
+                attention_output, 
+                audio_t + attention_output, 
+                vision_t + attention_output
+            )
+
+            # probabilities and select top-K
+            gate_p = F.softmax(gate_logits, dim=1, dtype=torch.float).to(attention_output.dtype)
+            weights, selected_experts = torch.topk(gate_logits, topK)  # (T, K)
+            weights = F.softmax(weights, dim=1, dtype=torch.float).to(attention_output.dtype)
+
+            expert_outputs = [
+                self.txt_local_exp(attention_output),                    
+                self.txt_global_exp(attention_output),                   
+                self.au_local_exp(audio_t + attention_output),           
+                self.au_global_exp(audio_t + attention_output),          
+                self.vis_local_exp(vision_t + attention_output),         
+                self.vis_global_exp(vision_t + attention_output),        
+            ]
+
+            # num_experts x B x L_t x d_model
+            expert_outputs = torch.stack(expert_outputs, dim=0)
+            # num_experts x T x d_model)
+            expert_outputs = expert_outputs.view(self.num_experts, T, hidden_dim)
+            # T x num_experts x d_model)
+            expert_outputs = expert_outputs.permute(1, 0, 2)
+
+            # T x K x d_model
+            selected_experts_expanded = selected_experts.unsqueeze(-1).expand(-1, -1, hidden_dim)
+
+            # T x K x d_model
+            selected_outputs = torch.gather(expert_outputs, 1, selected_experts_expanded)
+
+            # T x K x 1
+            weights_expanded = weights.unsqueeze(-1)  # (T, K, 1)
+            # T x d_model
+            weighted_sum = (weights_expanded * selected_outputs).sum(dim=1)
+
+            # B x L_t x d_model
+            results = weighted_sum.view(batch_size, sequence_length, hidden_dim)
+            results = (32 / self.rank) * results
+
+            f = torch.zeros(self.num_experts)
+            P = torch.zeros(self.num_experts)
+
+            for i in range(self.num_experts):
+                f[i] = torch.sum(selected_experts == i).item() / T
+                P[i] = torch.sum(gate_p[:, i]) / T
+
+            #print(f"\nExpert selection frequencies (f): {f}")
+            #print(f"Expert routing probabilities (P): {P}")
             
             lbloss = Load_Balancing_loss()
             interval_1 = N

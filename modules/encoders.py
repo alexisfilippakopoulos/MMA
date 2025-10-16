@@ -203,3 +203,80 @@ class RouterPFMultiHeadAttention(nn.Module):
         out = self.out(out)
 
         return out
+    
+
+class TemporalAwareRouter(nn.Module):
+    """
+    Temporal-Aware Router that incorporates both spatial and temporal context.
+
+    Args:
+        embed_dim (int): Dimension of input embeddings (d_t in paper)
+        num_experts (int): Total number of experts (N_total = 14 with N=2 per modality type)
+        kernel_size (int): Kernel size for local temporal convolution
+    """
+    def __init__(self, embed_dim=768, num_experts=6, kernel_size=3):
+        super(TemporalAwareRouter, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_experts = num_experts
+        self.kernel_size = kernel_size
+
+        # local temporal context
+        self.local_conv = nn.Conv1d(
+            in_channels=embed_dim,
+            out_channels=embed_dim,
+            kernel_size=kernel_size,
+            padding="same",
+            groups=1
+        )
+
+        # global temporal context projection
+        self.global_proj = nn.Linear(embed_dim, embed_dim)
+
+        # maps spatio-temporal features to expert scores
+        self.route_proj = nn.Linear(5 * embed_dim, num_experts)
+
+    def forward(self, x_text, x_au, x_vis):
+        """
+        Forward pass for temporal-aware routing.
+
+        Args:
+            x_text (Tensor): Text features X_t^l
+                            Shape: (batch_size, seq_length, embed_dim)
+            x_au (Tensor): Text-Audio features X_a^l
+                            Shape: (batch_size, seq_length, embed_dim)
+            x_vis (Tensor): Text-Visual features X_v^l
+                            Shape: (batch_size, seq_length, embed_dim)
+
+        Returns:
+            Tensor: Gating logits g_i^(l) of shape (batch_size*seq_length, num_experts)
+        """
+        batch_size = x_text.shape[0]
+        seq_length = x_text.shape[1]
+
+        # B x d_model x L_t
+        x_text_t = x_text.transpose(2, 1)
+        local_context = self.local_conv(x_text_t)
+        # B x L_t x d_model
+        local_context = local_context.transpose(1, 2)
+
+        # B x 1 x d_model
+        global_context = torch.mean(x_text, dim=1, keepdim=True)
+        # project and broadcast to all positions)
+        global_context_proj = self.global_proj(global_context) 
+        global_context = global_context_proj.expand(batch_size, seq_length, self.embed_dim)
+
+        # temporal and spatial features (bs x seq_length x 5*embed_dim)
+        M = torch.cat([x_text, x_au, x_vis, local_context, global_context], dim=-1)  # 
+
+        # param-free self attn
+        Q, K, V = M, M, M
+
+        attn_weights = F.softmax(torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.embed_dim), dim=-1)
+        M_tilde = torch.matmul(attn_weights, V) 
+
+        gate_logits = self.route_proj(M_tilde)
+        # B * L_t x num_experts
+        gate_logits = gate_logits.view(-1, self.num_experts)
+
+        return gate_logits
+

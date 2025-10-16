@@ -158,7 +158,7 @@ class NoParamMultiHeadAttention(nn.Module):
     
 
 class LocalTemporalExpert(nn.Module):
-    def __init__(self, config, d_model=768,
+    def __init__(self, config=None, d_model=768,
                  bottleneck=64, dropout=0.2, 
                  init_option="bert", kernel_size=3,
                  dilation=1, 
@@ -283,7 +283,7 @@ class LocalTemporalExpert(nn.Module):
         return output
     
 class GlobalTemporalExpert(nn.Module):
-    def __init__(self, config, d_model=768,
+    def __init__(self, config=None, d_model=768,
                  bottleneck=64, dropout=0.2, 
                  num_heads=4, max_relative_position=32,
                  init_option="bert",
@@ -337,88 +337,88 @@ class GlobalTemporalExpert(nn.Module):
                 nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
                 nn.init.zeros_(self.down_proj.bias)
                 
-                nn.init.kaiming_uniform_(self.W_Q.weight, a=math.sqrt(5))
-                nn.init.kaiming_uniform_(self.W_K.weight, a=math.sqrt(5))
-                nn.init.kaiming_uniform_(self.W_V.weight, a=math.sqrt(5))
-                nn.init.kaiming_uniform_(self.W_O.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_q.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_k.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_v.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_o.weight, a=math.sqrt(5))
                 
                 nn.init.zeros_(self.up_proj.weight)
                 nn.init.zeros_(self.up_proj.bias)
                 
-                nn.init.zeros_(self.relative_position_bias)
+                nn.init.zeros_(self.relative_pos_bias)
 
-        def get_relative_position_bias(self, seq_len, device):
-            positions = torch.arange(seq_len, device=device)
-            relative_positions = positions.unsqueeze(0) - positions.unsqueeze(1)
-            # clip(i-j, -L_max, L_max)
-            relative_positions = torch.clamp(relative_positions, -self.max_relative_position, self.max_relative_position)
-            # shift by L_max
-            relative_positions_indices = relative_positions + self.max_relative_position
-            bias = self.relative_pos_bias[:, relative_positions_indices]
-            return bias
+    def get_relative_position_bias(self, seq_len, device):
+        positions = torch.arange(seq_len, device=device)
+        relative_positions = positions.unsqueeze(0) - positions.unsqueeze(1)
+        # clip(i-j, -L_max, L_max)
+        relative_positions = torch.clamp(relative_positions, -self.max_relative_position, self.max_relative_position)
+        # shift by L_max
+        relative_positions_indices = relative_positions + self.max_relative_position
+        bias = self.relative_pos_bias[:, relative_positions_indices]
+        return bias
+    
+    def forward(self, x, add_residual=False, residual=None, attention_mask=None):
+        batch_size, seq_len, _ = x.shape
+        residual = x if residual is None else residual
+
+        # optional pre-layernorm
+        if self.adapter_layernorm_option == "in":
+            x = self.adapter_layer_norm_before(x)
+
+        # down proj
+        H = self.down_proj(x)
+        H = self.non_linear_func(H)
+
+        # attn projections
+        Q = self.W_q(H)
+        K = self.W_k(H)
+        V = self.W_v(H)
         
-        def forward(self, x, add_residual=False, residual=None, attention_mask=None):
-            batch_size, seq_len, _ = x.shape
-            residual = x if residual is None else residual
+        # reshape for multi-head attention
+        Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.head_dim)
 
-            # optional pre-layernorm
-            if self.adapter_layernorm_option == "in":
-                x = self.adapter_layer_norm_before(x)
+        rel_pos_bias = self.get_relative_position_bias(seq_len, x.device)
+        attn_scores = attn_scores + rel_pos_bias.unsqueeze(0)
 
-            # down proj
-            H = self.down_proj(x)
-            H = self.non_linear_func(H)
+        # apply mask if provided
+        if attention_mask is not None:
+            if attention_mask.dim() == 2:
+                # (batch_size, seq_len) -> (batch_size, 1, 1, seq_len)
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            attn_scores = attn_scores.masked_fill(attention_mask == 0, float('-inf'))
 
-            # attn projections
-            Q = self.W_q(H)
-            K = self.W_k(H)
-            V = self.W_v(H)
-            
-            # reshape for multi-head attention
-            Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-            K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-            V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-            
-            attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attn_weights = F.softmax(attn_scores, dim=-1)
+        attn_weights = self.attn_dropout(attn_weights)
+        attn_output = torch.matmul((attn_weights), V)
 
-            rel_pos_bias =  get_relative_position_bias(self, seq_len, x.device)
-            attn_scores = attn_scores + rel_pos_bias.unsqueeze(0)
+        # reshape back: (batch_size, seq_len, down_size)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.down_size)
 
-            # apply mask if provided
-            if attention_mask is not None:
-                if attention_mask.dim() == 2:
-                    # (batch_size, seq_len) -> (batch_size, 1, 1, seq_len)
-                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-                attn_scores = attn_scores.masked_fill(attention_mask == 0, float('-inf'))
+        # output projection
+        H_attn = self.W_o(attn_output)
+        H_attn = self.output_dropout(H_attn)
+        
+        # residual connection
+        H_tilde = H + H_attn
+        
+        # up-projection
+        up = self.up_proj(H_tilde)
+        up = up * self.scale
 
-            attn_weights = F.softmax(attn_scores, dim=-1)
-            attn_weights = self.attn_dropout(attn_weights)
-            attn_output = torch.matmul((attn_weights), V)
+        # optional post-layernorm
+        if self.adapter_layernorm_option == "out":
+            up = self.adapter_layer_norm_before(up)
 
-            # reshape back: (batch_size, seq_len, down_size)
-            attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.down_size)
+        if add_residual:
+            output = up + residual
+        else:
+            output = up
 
-            # output projection
-            H_attn = self.W_O(attn_output)
-            H_attn = self.output_dropout(H_attn)
-            
-            # residual connection
-            H_tilde = H + H_attn
-            
-            # up-projection
-            up = self.up_proj(H_tilde)
-            up = up * self.scale
-
-            # optional post-layernorm
-            if self.adapter_layernorm_option == "out":
-                up = self.adapter_layer_norm_before(up)
-
-            if add_residual:
-                output = up + residual
-            else:
-                output = up
-
-            return output
+        return output
         
 class SynchronyExpert(nn.Module):
     def __init__(self, config, d_model=768,
@@ -481,9 +481,9 @@ class SynchronyExpert(nn.Module):
                 nn.init.kaiming_uniform_(self.down_proj_audio.weight, a=math.sqrt(5))
                 nn.init.zeros_(self.down_proj_audio.bias)
 
-                nn.init.kaiming_uniform_(self.W_Q_audio.weight, a=math.sqrt(5))
-                nn.init.kaiming_uniform_(self.W_K_video.weight, a=math.sqrt(5))
-                nn.init.kaiming_uniform_(self.W_V_video.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_q_audio.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_k_video.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_v_video.weight, a=math.sqrt(5))
 
                 nn.init.zeros_(self.proximity_bias)
 
@@ -492,9 +492,9 @@ class SynchronyExpert(nn.Module):
                 nn.init.kaiming_uniform_(self.W_2_fusion.weight, a=math.sqrt(5))
                 nn.init.zeros_(self.W_2_fusion.bias)
 
-                nn.init.kaiming_uniform_(self.W_Q_align.weight, a=math.sqrt(5))
-                nn.init.kaiming_uniform_(self.W_K_align.weight, a=math.sqrt(5))
-                nn.init.kaiming_uniform_(self.W_V_align.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_q_align.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_k_align.weight, a=math.sqrt(5))
+                nn.init.kaiming_uniform_(self.W_v_align.weight, a=math.sqrt(5))
 
                 nn.init.zeros_(self.up_proj.weight)
                 nn.init.zeros_(self.up_proj.bias)
@@ -522,7 +522,7 @@ class SynchronyExpert(nn.Module):
         clamped_indices = torch.clamp(temporal_distance_int, 0, 2 * self.temporal_window)
         
         # apply learnable bias
-        bias[within_window] = self.temporal_bias[clamped_indices[within_window]]
+        bias[within_window] = self.proximity_bias[clamped_indices[within_window]]
 
         return bias
         
