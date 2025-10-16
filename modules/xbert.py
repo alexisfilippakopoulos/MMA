@@ -657,14 +657,34 @@ class XBertLayer(nn.Module):
             #print(f"\nExpert selection frequencies (f): {f}")
             #print(f"Expert routing probabilities (P): {P}")
             
-            lbloss = Load_Balancing_loss()
+            """lbloss = Load_Balancing_loss()
             interval_1 = N
             interval_2 = N*2
 
             lb_loss = lbloss(f[0:interval_1], P[0:interval_1]) + \
             lbloss(f[interval_1:interval_2], P[interval_1:interval_2]) + \
             lbloss(f[interval_2:self.num_experts], P[interval_2:self.num_experts])
-            lb_loss = lb_loss*N
+            lb_loss = lb_loss*N"""
+
+            local_expert_indices = torch.tensor([0, 2, 4], device=f.device, dtype=torch.long)
+            global_expert_indices = torch.tensor([1, 3, 5], device=f.device, dtype=torch.long)
+
+            # extract the frequency (f) and probability (P) tensors for each subgroup
+            f_local = f.index_select(0, local_expert_indices)
+            P_local = P.index_select(0, local_expert_indices)
+
+            f_global = f.index_select(0, global_expert_indices)
+            P_global = P.index_select(0, global_expert_indices)
+
+            # calculate the balancing loss for each subgroup independently
+            lbloss = Load_Balancing_loss()
+            lb_loss_local = lbloss(f_local, P_local)
+            lb_loss_global = lbloss(f_global, P_global)
+
+            # Combine the losses and apply the scaling factor.
+            num_experts_per_subgroup = 3
+            lb_loss = num_experts_per_subgroup * (lb_loss_local + lb_loss_global)
+
         #------------------------------adapter_change------------------------------#
 
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
