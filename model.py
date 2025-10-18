@@ -13,6 +13,8 @@ class MMA_Bert(nn.Module):
         config = BertConfig.from_pretrained(hp.bert_path)
         print("Bert config before modification:")
         print(config)
+        if not hasattr(config,'num_experts'):
+            setattr(config,'num_experts', hp.num_experts)
         if not hasattr(config,'TopK'):
             setattr(config,'TopK',hp.TopK)
         if not hasattr(config,'kernel_size'):

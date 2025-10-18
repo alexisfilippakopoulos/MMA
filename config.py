@@ -56,6 +56,7 @@ def get_args():
     parser.add_argument('--multiseed', action='store_true', help='training using multiple seed')
     parser.add_argument('--d_proj', type=int, default=128,
                         help='hidden size in projection network')
+    parser.add_argument('--num_experts', type=int, default=6, help='number of experts')
     parser.add_argument('--TopK', type=int, default=3, help='K')
     parser.add_argument('--rank', type=int, default=32, help='rank of parallel adapters')
     parser.add_argument('--lora_rank', type=int, default=32, help='rank of lora')
