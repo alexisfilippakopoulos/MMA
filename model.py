@@ -11,6 +11,8 @@ class MMA_Bert(nn.Module):
         super().__init__()
         self.tokenizer = BertTokenizer.from_pretrained(hp.bert_path)
         config = BertConfig.from_pretrained(hp.bert_path)
+        print("Bert config before modification:")
+        print(config)
         if not hasattr(config,'TopK'):
             setattr(config,'TopK',hp.TopK)
         if not hasattr(config,'kernel_size'):
@@ -23,6 +25,9 @@ class MMA_Bert(nn.Module):
             setattr(config,'vision_dim',hp.vision_dim)
         if not hasattr(config,'start_fusion_layer'):
             setattr(config,'start_fusion_layer',hp.start_fusion_layer)
+
+        print("Bert config after modification:")
+        print(config)
         self.rank = hp.rank
         peft_config = LoraConfig(inference_mode=False, r=hp.lora_rank, lora_alpha=32, lora_dropout=0.1)
         model = XBertModel.from_pretrained(hp.bert_path, config=config)

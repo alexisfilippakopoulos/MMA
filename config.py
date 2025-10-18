@@ -54,10 +54,9 @@ def get_args():
 
     # Architecture
     parser.add_argument('--multiseed', action='store_true', help='training using multiple seed')
-    parser.add_argument('--d_prjh', type=int, default=128,
+    parser.add_argument('--d_proj', type=int, default=128,
                         help='hidden size in projection network')
     parser.add_argument('--TopK', type=int, default=3, help='K')
-    # parser.add_argument('--bottleneck', type=int, default=64, help='bottleneck of parallel adapters')
     parser.add_argument('--rank', type=int, default=32, help='rank of parallel adapters')
     parser.add_argument('--lora_rank', type=int, default=32, help='rank of lora')
     parser.add_argument('--kernel_size', type=int, default=3,
