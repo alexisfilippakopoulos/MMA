@@ -390,3 +390,155 @@ class TemporalStatisticalRouter(nn.Module):
         gate_logits = gate_logits.view(-1, self.num_experts)
         
         return gate_logits
+    
+
+class MMA_Router(nn.Module):
+    """
+    Temporal-Aware Router that incorporates both spatial and temporal context.
+
+    Args:
+        embed_dim (int): Dimension of input embeddings (d_t in paper)
+        num_experts (int): Total number of experts (N_total = 14 with N=2 per modality type)
+        kernel_size (int): Kernel size for local temporal convolution
+    """
+    def __init__(self, embed_dim=768, num_experts=6):
+        super(TemporalAwareRouter, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_experts = num_experts
+
+        # maps spatio-temporal features to expert scores
+        self.route_proj = nn.Linear(3 * embed_dim, num_experts)
+
+    def forward(self, x_text, x_au, x_vis):
+        """
+        Forward pass for temporal-aware routing.
+
+        Args:
+            x_text (Tensor): Text features X_t^l
+                            Shape: (batch_size, seq_length, embed_dim)
+            x_au (Tensor): Text-Audio features X_a^l
+                            Shape: (batch_size, seq_length, embed_dim)
+            x_vis (Tensor): Text-Visual features X_v^l
+                            Shape: (batch_size, seq_length, embed_dim)
+
+        Returns:
+            Tensor: Gating logits g_i^(l) of shape (batch_size*seq_length, num_experts)
+        """
+        batch_size = x_text.shape[0]
+        seq_length = x_text.shape[1]
+
+        # B x d_model x L_t
+        x_text_t = x_text.transpose(2, 1)
+        M = torch.cat([x_text, x_au, x_vis], dim=-1)  # 
+
+        # param-free self attn
+        Q, K, V = M, M, M
+
+        attn_weights = F.softmax(torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(768), dim=-1)
+        M_tilde = torch.matmul(attn_weights, V) 
+        M_tilde.shape 
+
+        gate_logits = self.route_proj(M_tilde)
+        # B * L_t x num_experts
+        gate_logits = gate_logits.view(-1, self.num_experts)
+
+        return gate_logits
+
+
+class UltraLightTemporalRouter(nn.Module):
+    """
+    Ultra-lightweight temporal router using parameter-free statistics.
+    
+    Theory: Use simple scalar change metrics as temporal indicators,
+    then concatenate with spatial features for routing.
+    
+    Args:
+        embed_dim (int): Dimension of input embeddings (d_t)
+        num_experts (int): Total number of experts
+    """
+    def __init__(self, embed_dim=768, num_experts=6):
+        super(UltraLightTemporalRouter, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_experts = num_experts
+        
+        # Single projection: [3*embed_dim + 7 scalar features] → num_experts
+        # 7 features: 3 change magnitudes + 3 change directions + 1 av_alignment
+        self.route_proj = nn.Linear(3 * embed_dim + 7, num_experts)
+        
+        # Total params: (3*768 + 7) * 6 = 13,854 params for 6 experts
+        #               (3*768 + 7) * 14 = 32,326 params for 14 experts
+
+    def compute_change_indicators(self, x):
+        """
+        Compute parameter-free temporal change indicators.
+        
+        Args:
+            x: (batch_size, seq_length, embed_dim)
+            
+        Returns:
+            change_mag: (batch_size, seq_length, 1) - magnitude of change
+            change_dir: (batch_size, seq_length, 1) - direction consistency
+        """
+        # First-order difference: Δ_i = x_i - x_{i-1}
+        x_prev = torch.cat([x[:, :1, :], x[:, :-1, :]], dim=1)
+        delta = x - x_prev  # (bs, seq_len, embed_dim)
+        
+        # Change magnitude (L2 norm)
+        change_mag = torch.norm(delta, p=2, dim=-1, keepdim=True)  # (bs, seq_len, 1)
+        
+        # Change direction consistency (cosine similarity between consecutive changes)
+        # High value → smooth change, Low value → erratic change
+        delta_prev = torch.cat([delta[:, :1, :], delta[:, :-1, :]], dim=1)
+        # Cosine similarity
+        cos_sim = F.cosine_similarity(delta, delta_prev, dim=-1, eps=1e-8)
+        change_dir = cos_sim.unsqueeze(-1)  # (bs, seq_len, 1)
+        
+        return change_mag, change_dir
+
+    def forward(self, x_text, x_au, x_vis):
+        """
+        Args:
+            x_text: (batch_size, seq_length, embed_dim)
+            x_au: (batch_size, seq_length, embed_dim)
+            x_vis: (batch_size, seq_length, embed_dim)
+            
+        Returns:
+            gate_logits: (batch_size*seq_length, num_experts)
+        """
+        batch_size, seq_length, _ = x_text.shape
+        
+        # ===== Compute Parameter-Free Temporal Indicators =====
+        
+        # Per-modality change indicators
+        text_mag, text_dir = self.compute_change_indicators(x_text)
+        audio_mag, audio_dir = self.compute_change_indicators(x_au)
+        video_mag, video_dir = self.compute_change_indicators(x_vis)
+        
+        # Cross-modal alignment indicator (audio-visual difference magnitude)
+        av_diff = x_au - x_vis
+        av_alignment = torch.norm(av_diff, p=2, dim=-1, keepdim=True)  # (bs, seq_len, 1)
+        
+        # ===== Concatenate Everything =====
+        
+        features = torch.cat([
+            # Spatial features (what content is present)
+            x_text,      # (bs, seq_len, 768)
+            x_au,        # (bs, seq_len, 768)
+            x_vis,       # (bs, seq_len, 768)
+            
+            # Temporal indicators (scalar features)
+            text_mag,    # (bs, seq_len, 1) - How much did text change?
+            audio_mag,   # (bs, seq_len, 1) - How much did audio change?
+            video_mag,   # (bs, seq_len, 1) - How much did video change?
+            text_dir,    # (bs, seq_len, 1) - Is text change smooth or erratic?
+            audio_dir,   # (bs, seq_len, 1) - Is audio change smooth or erratic?
+            video_dir,   # (bs, seq_len, 1) - Is video change smooth or erratic?
+            av_alignment # (bs, seq_len, 1) - Are audio and video aligned?
+        ], dim=-1)  # (bs, seq_len, 3*768 + 7)
+        
+        # ===== Route to Experts =====
+        gate_logits = self.route_proj(features)  # (bs, seq_len, num_experts)
+        gate_logits = gate_logits.view(-1, self.num_experts)
+        
+        return gate_logits
+    

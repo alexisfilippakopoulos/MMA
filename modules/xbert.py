@@ -782,7 +782,7 @@ class BertEncoder(nn.Module):
         next_decoder_cache = () if use_cache else None
         batch_size = hidden_states.shape[0]
         LBLoss = 0.0
-        f = torch.zeros((12, 6))
+        f = torch.zeros((12, self.layer[0].num_experts))
         # layer_experts_outputs = torch.zeros((12, batch_size*3*50, 769))
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
