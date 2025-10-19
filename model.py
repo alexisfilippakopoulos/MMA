@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from modules.encoders import *
 from transformers import BertTokenizer, BertConfig, T5Tokenizer, T5Config, BertModel
 from peft import LoraConfig, TaskType, get_peft_model
-from modules.xbert_1loc_1glob_temp_aware import XBertModel
+from modules.xbert_1loc_1glob_stat import XBertModel
 
 class MMA_Bert(nn.Module):
     def __init__(self, hp):
