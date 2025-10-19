@@ -470,13 +470,13 @@ class XBertLayer(nn.Module):
             self.adapter_1 = Adapter_Layer(bottleneck=self.rank)
             self.adapter_2 = Adapter_Layer(bottleneck=self.rank)"""
 
-            self.txt_local_exp = LocalTemporalExpert(bottleneck=self.rank)
+            self.txt_local_exp = LocalTemporalExpert_2(bottleneck=self.rank)
             self.txt_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
 
-            self.au_local_exp = LocalTemporalExpert(bottleneck=self.rank)
+            self.au_local_exp = LocalTemporalExpert_2(bottleneck=self.rank)
             self.au_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
 
-            self.vis_local_exp = LocalTemporalExpert(bottleneck=self.rank)
+            self.vis_local_exp = LocalTemporalExpert_2(bottleneck=self.rank)
             self.vis_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
         
             self.adapter_atten_gate = RouterPFSelfAttention()
