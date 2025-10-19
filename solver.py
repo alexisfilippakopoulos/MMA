@@ -212,6 +212,10 @@ class Solver(object):
             print('Epoch {:2d} | Time {:5.4f} sec | Valid Loss {:5.4f} | Test Loss {:5.4f}'.format(epoch, duration, val_loss, test_loss))
             print("-"*50)
             
+            if self.hp.dataset in ["mosei_senti", "mosei"]:
+                    eval_mosei_senti(results, truths, True)
+            elif self.hp.dataset == 'mosi':
+                eval_mosi(results, truths, True)
 
             if val_loss < best_valid:
                 # model.model.save()
@@ -220,10 +224,6 @@ class Solver(object):
                 best_valid = val_loss
                 best_epoch = epoch
                 best_mae = test_loss
-                if self.hp.dataset in ["mosei_senti", "mosei"]:
-                    eval_mosei_senti(results, truths, True)
-                elif self.hp.dataset == 'mosi':
-                    eval_mosi(results, truths, True)
                 best_results = results
                 best_truths = truths
 

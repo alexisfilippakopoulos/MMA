@@ -444,7 +444,7 @@ class XBertLayer(nn.Module):
             self.crossattention = BertAttention(config, position_embedding_type="absolute")
         self.intermediate = BertIntermediate(config)
         self.output = BertOutput(config)
-        self.num_experts = 6
+        self.num_experts = 12
         self.add_adapter = add_adapter
         #  -----------------adapters-------------------------
         if add_adapter==True:
@@ -470,14 +470,20 @@ class XBertLayer(nn.Module):
             self.adapter_1 = Adapter_Layer(bottleneck=self.rank)
             self.adapter_2 = Adapter_Layer(bottleneck=self.rank)"""
 
-            self.txt_local_exp = LocalTemporalExpert(bottleneck=self.rank)
-            self.txt_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+            self.txt_local_exp1 = LocalTemporalExpert(bottleneck=self.rank)
+            self.txt_local_exp2 = LocalTemporalExpert(bottleneck=self.rank)
+            self.txt_global_exp1 = GlobalTemporalExpert(bottleneck=self.rank)
+            self.txt_global_exp2 = GlobalTemporalExpert(bottleneck=self.rank)
+            
+            self.au_local_exp1 = LocalTemporalExpert(bottleneck=self.rank)
+            self.au_local_exp2 = LocalTemporalExpert(bottleneck=self.rank)
+            self.au_global_exp1 = GlobalTemporalExpert(bottleneck=self.rank)
+            self.au_global_exp2 = GlobalTemporalExpert(bottleneck=self.rank)
 
-            self.au_local_exp = LocalTemporalExpert(bottleneck=self.rank)
-            self.au_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
-
-            self.vis_local_exp = LocalTemporalExpert(bottleneck=self.rank)
-            self.vis_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+            self.vis_local_exp1 = LocalTemporalExpert(bottleneck=self.rank)
+            self.vis_local_exp2 = LocalTemporalExpert(bottleneck=self.rank)
+            self.vis_global_exp1 = GlobalTemporalExpert(bottleneck=self.rank)
+            self.vis_global_exp2 = GlobalTemporalExpert(bottleneck=self.rank)
         
             self.adapter_atten_gate = RouterPFSelfAttention()
             self.temporal_adapter = TemporalAwareRouter(embed_dim=768, num_experts=self.num_experts, kernel_size=3)
@@ -612,17 +618,24 @@ class XBertLayer(nn.Module):
             )
 
             # probabilities and select top-K
-            gate_p = F.softmax(gate_logits, dim=1, dtype=torch.float).to(attention_output.dtype)
-            weights, selected_experts = torch.topk(gate_logits, topK)  # (T, K)
+            gate_p = F.softmax(gate_logits, dim=1, dtype=torch.float).to(attention_output.dtype) # T x num_experts
+            weights, selected_experts = torch.topk(gate_logits, topK)  # T x K
             weights = F.softmax(weights, dim=1, dtype=torch.float).to(attention_output.dtype)
 
+            # group per modality(t,v,a) and per type
             expert_outputs = [
-                self.txt_local_exp(attention_output),                    
-                self.txt_global_exp(attention_output),                   
-                self.au_local_exp(audio_t + attention_output),           
-                self.au_global_exp(audio_t + attention_output),          
-                self.vis_local_exp(vision_t + attention_output),         
-                self.vis_global_exp(vision_t + attention_output),        
+                self.txt_local_exp1(attention_output), 
+                self.txt_local_exp2(attention_output),                    
+                self.txt_global_exp1(attention_output),  
+                self.txt_global_exp2(attention_output),                   
+                self.au_local_exp1(audio_t + attention_output), 
+                self.au_local_exp2(audio_t + attention_output),           
+                self.au_global_exp1(audio_t + attention_output),  
+                self.au_global_exp2(audio_t + attention_output),          
+                self.vis_local_exp1(vision_t + attention_output),
+                self.vis_local_exp2(vision_t + attention_output),         
+                self.vis_global_exp1(vision_t + attention_output),
+                self.vis_global_exp2(vision_t + attention_output),        
             ]
 
             # num_experts x B x L_t x d_model
@@ -647,43 +660,29 @@ class XBertLayer(nn.Module):
             results = weighted_sum.view(batch_size, sequence_length, hidden_dim)
             results = (32 / self.rank) * results
 
-            f = torch.zeros(self.num_experts)
-            P = torch.zeros(self.num_experts)
+            # f: fraction of tokens dispatched to each expert
+            presence = torch.zeros(T, self.num_experts, dtype=torch.bool)
+            presence.scatter_(1, selected_experts, True)   # T x K)
+            f = presence.float().mean(dim=0)          
 
-            for i in range(self.num_experts):
-                f[i] = torch.sum(selected_experts == i).item() / T
-                P[i] = torch.sum(gate_p[:, i]) / T
+            # P: average routing probability for each expert
+            gate_p = F.softmax(gate_logits, dim=1)
+            P = gate_p.mean(dim=0)                         # (num_experts,)
 
-            #print(f"\nExpert selection frequencies (f): {f}")
-            #print(f"Expert routing probabilities (P): {P}")
-            
-            """lbloss = Load_Balancing_loss()
-            interval_1 = N
-            interval_2 = N*2
-
-            lb_loss = lbloss(f[0:interval_1], P[0:interval_1]) + \
-            lbloss(f[interval_1:interval_2], P[interval_1:interval_2]) + \
-            lbloss(f[interval_2:self.num_experts], P[interval_2:self.num_experts])
-            lb_loss = lb_loss*N"""
-
-            local_expert_indices = torch.tensor([0, 2, 4], device=f.device, dtype=torch.long)
-            global_expert_indices = torch.tensor([1, 3, 5], device=f.device, dtype=torch.long)
-
-            # extract the frequency (f) and probability (P) tensors for each subgroup
-            f_local = f.index_select(0, local_expert_indices)
-            P_local = P.index_select(0, local_expert_indices)
-
-            f_global = f.index_select(0, global_expert_indices)
-            P_global = P.index_select(0, global_expert_indices)
-
-            # calculate the balancing loss for each subgroup independently
+            # --- Load balancing ---
             lbloss = Load_Balancing_loss()
-            lb_loss_local = lbloss(f_local, P_local)
-            lb_loss_global = lbloss(f_global, P_global)
+            num_modalities = 3       # text, audio, vision
+            num_types = 2            # global, local
+            N = self.num_experts // (num_modalities * num_types)
 
-            # Combine the losses and apply the scaling factor.
-            num_experts_per_subgroup = 3
-            lb_loss = num_experts_per_subgroup * (lb_loss_local + lb_loss_global)
+            lb_loss = 0.0
+            for m in range(num_modalities):
+                for tau in range(num_types):
+                    start = m * (num_types * N) + tau * N
+                    end = start + N
+                    lb_loss += lbloss(f[start:end], P[start:end])
+
+            lb_loss = lb_loss * N
 
         #------------------------------adapter_change------------------------------#
 
