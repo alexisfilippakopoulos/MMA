@@ -486,7 +486,7 @@ class XBertLayer(nn.Module):
             self.vis_global_exp2 = GlobalTemporalExpert(bottleneck=self.rank)
         
             self.adapter_atten_gate = RouterPFSelfAttention()
-            self.temporal_adapter = TemporalAwareRouter(embed_dim=768, num_experts=self.num_experts, kernel_size=3)
+            self.temporal_adapter = TemporalStatisticalRouter(embed_dim=768, num_experts=self.num_experts)
 
     def forward(
         self,
