@@ -97,7 +97,7 @@ class Solver(object):
             proc_loss, proc_size = 0, 0
             main_loss = 0.0
             multi_con_loss = 0.0
-
+            exp_frequencies = []
             left_batch = self.update_batch
             expert_distribution = []
             for i_batch, batch_data in enumerate(self.train_loader):
@@ -114,7 +114,7 @@ class Solver(object):
                 
                 batch_size = y.size(0)               
                 preds, LBLoss, exp_freqs = model(vision, audio, text)
-                print("exp freqs", exp_freqs.shape)
+                exp_frequencies.append(exp_freqs.detach().cpu())
                 y_loss = criterion(preds, y)
                 loss = y_loss + 0.001*LBLoss
                 loss.backward()
@@ -132,8 +132,8 @@ class Solver(object):
                 epoch_loss += loss.item() * batch_size
                 main_loss +=y_loss.item() * batch_size
                 
-                    
-            return epoch_loss
+            exp_frequencies = torch.cat(exp_frequencies, dim=0)     
+            return epoch_loss, exp_frequencies
 
         def evaluate(model, criterion, test=False):
             model.eval()
@@ -141,8 +141,7 @@ class Solver(object):
             main_loss = 0.0        
             results = []
             truths = []
-            # expert_output = torch.zeros((12,1,769))
-            # expert_distribution = []
+            exp_frequencies = []
             with torch.no_grad():
                 for batch_data in loader:
                     raw_text = batch_data['raw_text']
@@ -154,33 +153,40 @@ class Solver(object):
                     with torch.cuda.device(0):
                         vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda()
                     batch_size = y.size(0)    
-                    preds,_ = model(vision, audio, text)           
+                    preds , _, exp_freqs = model(vision, audio, text)
+                    exp_frequencies.append(exp_freqs.detach().cpu())         
                     criterion = nn.L1Loss()
                     main_loss += criterion(preds, y).item() * batch_size   
                     results.append(preds)
                     truths.append(y)           
             
-
+            exp_frequencies = torch.cat(exp_frequencies, dim=0)
             results = torch.cat(results)
             truths = torch.cat(truths)
             test_preds = results.view(-1).cpu().detach().numpy()
             test_truth = truths.view(-1).cpu().detach().numpy()
             avg_main_loss =  np.mean(np.absolute(test_preds - test_truth))
-            return avg_main_loss, results, truths
+            return avg_main_loss, results, truths, exp_frequencies
 
         best_valid = 1e8
         patience = self.hp.patience
-
+        all_train_exp_freqs = []
+        all_val_exp_freqs = []
+        all_test_exp_freqs = []
         for epoch in range(1, self.hp.num_epochs+1):
             start = time.time()
             logging.info(f'epoch {epoch}:')
 
             self.epoch = epoch
 
-            train_main_loss= train(model, optimizer_main, criterion)  
-            val_loss, results_val, truths_val, = evaluate(model, criterion, test=False) 
-            test_loss, results, truths, = evaluate(model, criterion, test=True)  
-            
+            train_main_loss, train_exp_freqs = train(model, optimizer_main, criterion)  
+            val_loss, results_val, truths_val, val_exp_freqs = evaluate(model, criterion, test=False) 
+            test_loss, results, truths, test_exp_freqs = evaluate(model, criterion, test=True)  
+
+            all_train_exp_freqs.append(train_exp_freqs)
+            all_val_exp_freqs.append(val_exp_freqs)
+            all_test_exp_freqs.append(test_exp_freqs)
+
             test_preds = results.view(-1).cpu().detach().numpy()
             test_truth = truths.view(-1).cpu().detach().numpy()
             non_zeros = np.array([i for i, e in enumerate(test_truth) if e != 0])  
@@ -217,7 +223,7 @@ class Solver(object):
                 eval_mosei_senti(results, truths, True)
             elif self.hp.dataset == 'mosi':
                 eval_mosi(results, truths, True)
-
+            print(f"Mean Expert Usage\n\tTrain: {[round(freq, 3) for freq in train_exp_freqs.mean(dim=0).tolist()]}\n\tVal: {[round(freq, 3) for freq in val_exp_freqs.mean(dim=0).tolist()]}\n\tTest: {[round(freq, 3) for freq in test_exp_freqs.mean(dim=0).tolist()]}")
             if val_loss < best_valid:
                 # model.model.save()
                
