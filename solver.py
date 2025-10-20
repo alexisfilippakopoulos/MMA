@@ -216,7 +216,7 @@ class Solver(object):
             logging.info("-"*50)
             logging.info('Epoch {:2d} | Time {:5.4f} sec | Valid Loss {:5.4f} | Test Loss {:5.4f}'.format(epoch, duration, val_loss, test_loss))
             logging.info("-"*50)
-
+            logging.info(f"Mean Expert Usage\n\tTrain: {[round(freq, 3) for freq in train_exp_freqs.mean(dim=0).tolist()]}\n\tVal: {[round(freq, 3) for freq in val_exp_freqs.mean(dim=0).tolist()]}\n\tTest: {[round(freq, 3) for freq in test_exp_freqs.mean(dim=0).tolist()]}")
             # print(f'training on epoch {epoch}')
             # print(f'learnng rate: {learning_rate}')
             print("-"*50)

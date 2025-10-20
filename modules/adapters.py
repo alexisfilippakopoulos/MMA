@@ -543,7 +543,6 @@ class SynchronyExpert(nn.Module):
             x_text = self.adapter_layer_norm_before(x_text)
 
         # unimodal down-projections
-        print(video_features.shape)
         H_v = self.down_proj_video(video_features)
         H_v = self.non_linear_func(H_v)
 
