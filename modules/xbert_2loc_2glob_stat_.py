@@ -662,11 +662,11 @@ class XBertLayer(nn.Module):
 
             # f: fraction of tokens dispatched to each expert
             presence = torch.zeros(T, self.num_experts, dtype=torch.bool)
-            presence.scatter_(1, selected_experts, True)   # T x K)
+            presence.scatter_(1, selected_experts, True)   # T x K
             f = presence.float().mean(dim=0)          
 
             # P: average routing probability for each expert
-            gate_p = F.softmax(gate_logits, dim=1)
+            #gate_p = F.softmax(gate_logits, dim=1)
             P = gate_p.mean(dim=0)                         # (num_experts,)
 
             # --- Load balancing ---

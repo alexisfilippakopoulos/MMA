@@ -113,7 +113,8 @@ class Solver(object):
                     vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda()
                 
                 batch_size = y.size(0)               
-                preds, LBLoss = model(vision, audio, text)
+                preds, LBLoss, exp_freqs = model(vision, audio, text)
+                print("exp freqs", exp_freqs.shape)
                 y_loss = criterion(preds, y)
                 loss = y_loss + 0.001*LBLoss
                 loss.backward()
@@ -213,7 +214,7 @@ class Solver(object):
             print("-"*50)
             
             if self.hp.dataset in ["mosei_senti", "mosei"]:
-                    eval_mosei_senti(results, truths, True)
+                eval_mosei_senti(results, truths, True)
             elif self.hp.dataset == 'mosi':
                 eval_mosi(results, truths, True)
 
