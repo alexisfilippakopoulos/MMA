@@ -710,7 +710,7 @@ class BertEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-
+        print((self.config))
         self.start_fusion_layer = config.start_fusion_layer
         self.layer = nn.ModuleList([XBertLayer(config, add_adapter=(i>=self.start_fusion_layer)) for i in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False

@@ -29,29 +29,34 @@ class MMDataset(Dataset):
 
     def __init_mosi(self):
         path = self.args.data_path
+        path_unal = path.replace("aligned_50.pkl", "unaligned_50.pkl")
         with open(path, 'rb') as f:
-            data = pickle.load(f)
+            data_al = pickle.load(f)
+        with open(path_unal, 'rb') as f:
+            data_unal = pickle.load(f)
 
+        self.vision_unal = data_unal[self.mode]['vision'].astype(np.float32)
+        self.audio_unal = data_unal[self.mode]['audio'].astype(np.float32)
         # self.args.use_bert = True
         # self.args.need_truncated = True
         # self.args.need_data_aligned = True
 
         # if self.args.use_bert:
-        self.text = data[self.mode]['text_bert'].astype(np.float32)
+        self.text = data_al[self.mode]['text_bert'].astype(np.float32)
         # else:
-            # self.text = data[self.mode]['text'].astype(np.float32)
+            # self.text = data_al[self.mode]['text'].astype(np.float32)
      
-        self.vision = data[self.mode]['vision'].astype(np.float32)
-        self.audio = data[self.mode]['audio'].astype(np.float32)
+        self.vision = data_al[self.mode]['vision'].astype(np.float32)
+        self.audio = data_al[self.mode]['audio'].astype(np.float32)
 
-        self.rawText = data[self.mode]['raw_text']
-        self.ids = data[self.mode]['id']
+        self.rawText = data_al[self.mode]['raw_text']
+        self.ids = data_al[self.mode]['id']
         self.labels = {
-            'M': data[self.mode]['regression'+'_labels'].astype(np.float32)
+            'M': data_al[self.mode]['regression'+'_labels'].astype(np.float32)
         }
         if self.args.dataset == 'sims':
             for m in "TAV":
-                self.labels[m] = data[self.mode]['regression'+'_labels_'+m]
+                self.labels[m] = data_al[self.mode]['regression'+'_labels_'+m]
 
         logger.info(f"{self.mode} samples: {self.labels['M'].shape}")
 
@@ -87,6 +92,8 @@ class MMDataset(Dataset):
             'text': torch.Tensor(self.text[index]), 
             'audio': torch.Tensor(self.audio[index]),
             'vision': torch.Tensor(self.vision[index]),
+            'audio_unal': torch.Tensor(self.audio_unal[index]),
+            'vision_unal': torch.Tensor(self.vision_unal[index]),
             'index': index,
             'id': self.ids[index],
             'labels': {k: torch.Tensor(v[index].reshape(-1)) for k, v in self.labels.items()}

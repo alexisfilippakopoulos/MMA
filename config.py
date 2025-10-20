@@ -62,6 +62,8 @@ def get_args():
     parser.add_argument('--lora_rank', type=int, default=32, help='rank of lora')
     parser.add_argument('--kernel_size', type=int, default=3,
                         help='kernel_size')
+    parser.add_argument('--lb_loss_hyp', type=int, default=0.001,
+                        help='kernel_size')
 
     # Training Setting
     parser.add_argument('--batch_size', type=int, default=128, metavar='N',

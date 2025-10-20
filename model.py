@@ -35,7 +35,7 @@ class MMA_Bert(nn.Module):
     def get_tokenizer(self):
         return self.tokenizer
     
-    def forward(self, text, vision, audio):
+    def forward(self, text, vision, audio, audio_unaligned, vision_unaligned):
         """
         text: (batch_size, 3, seq_len)
         3: input_ids, input_mask, segment_ids
@@ -48,7 +48,7 @@ class MMA_Bert(nn.Module):
                                             attention_mask=input_mask,
                                             token_type_ids=segment_ids,
                                             vision=vision,
-                                            audio=audio)
+                                            audio=audio, audio_unaligned=audio_unaligned, vision_unaligned=vision_unaligned)
         return last_hidden_states, LBLoss, ep_d
 
 class MMA(nn.Module):
@@ -58,10 +58,10 @@ class MMA(nn.Module):
         self.cls_head = SubNet(in_size=768, hidden_size=128, n_class=1, dropout=0.2)
         self.config = BertConfig.from_pretrained(hp.bert_path)
         
-    def forward(self, vision, audio, text):   
+    def forward(self, vision, audio, text, audio_unal, vision_unal):   
         batch_size = text.shape[0]
         input_ids, input_mask = text[:,:,0].long(), text[:,:,1].float()
-        hidden_states, LBLoss, ep_d = self.model(text, vision, audio)
+        hidden_states, LBLoss, ep_d = self.model(text, vision, audio, audio_unal, vision_unal)
         embedding = hidden_states[:,0,:]
         pred = self.cls_head(embedding)
         return pred, LBLoss, ep_d

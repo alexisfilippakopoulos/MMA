@@ -105,18 +105,20 @@ class Solver(object):
                 vision = batch_data['vision']
                 audio = batch_data['audio']
                 text = batch_data['text']
+                audio_unal = batch_data['audio_unal']
+                vision_unal = batch_data['vision_unal']
                 y = batch_data['labels']['M']
                 #print(f"Vision data shape: {vision.shape}, Audio data shape: {audio.shape}, Text data shape: {text.shape}, Label shape: {y.shape}")
                 
                 model.zero_grad()
                 with torch.cuda.device(0):
-                    vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda()
+                    vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda(), audio_unal.cuda(), vision_unal.cuda()
                 
                 batch_size = y.size(0)               
-                preds, LBLoss, exp_freqs = model(vision, audio, text)
+                preds, LBLoss, exp_freqs = model(vision, audio, text, audio_unal, vision_unal)
                 exp_frequencies.append(exp_freqs.detach().cpu())
                 y_loss = criterion(preds, y)
-                loss = y_loss + 0.001*LBLoss
+                loss = y_loss + 0.001 * LBLoss
                 loss.backward()
                 
                 # -------------------------------------------------------- #
@@ -149,11 +151,13 @@ class Solver(object):
                     audio = batch_data['audio']
                     text = batch_data['text']
                     y = batch_data['labels']['M']
+                    audio_unal = batch_data['audio_unal']
+                    vision_unal = batch_data['vision_unal']
 
                     with torch.cuda.device(0):
-                        vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda()
+                        vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda(), audio_unal.cuda(), vision_unal.cuda()
                     batch_size = y.size(0)    
-                    preds , _, exp_freqs = model(vision, audio, text)
+                    preds , _, exp_freqs = model(vision, audio, text, audio_unal, vision_unal)
                     exp_frequencies.append(exp_freqs.detach().cpu())         
                     criterion = nn.L1Loss()
                     main_loss += criterion(preds, y).item() * batch_size   

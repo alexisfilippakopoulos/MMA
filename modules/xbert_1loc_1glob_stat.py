@@ -494,7 +494,9 @@ class XBertLayer(nn.Module):
         vision: Optional[bool] = None,
         audio: Optional[bool] = None,
         vision_length = None,
-        audio_length = None
+        audio_length = None,
+        audio_unaligned = None,
+        vision_unaligned = None
     ) -> Tuple[torch.Tensor]:
         """
         Forward pass for the XBertLayer.
@@ -548,59 +550,11 @@ class XBertLayer(nn.Module):
             topK=self.TopK
             N = self.num_experts // 3
 
+            print("MESAAAA STO XBERT")
+            print(audio.shape, audio_unaligned.shape)
+            print(vision.shape, vision_unaligned.shape)
+
             # every token position (across all sequences) is a separate sample of size [hidden_dim]
-            """batch_size, sequence_length, hidden_dim = attention_output.shape
-            T = batch_size*sequence_length
-            # bs * seq_len x d_model
-            attention_output = attention_output.view(-1,hidden_dim)
-            audio_t = audio_t.contiguous().view(-1,hidden_dim)
-            vision_t = vision_t.contiguous().view(-1,hidden_dim)
-            #print("Meta to transpose", attention_output.shape, audio_t.shape, vision_t.shape)  # (bs*len, dim)
-
-            
-            # per-token activation score for all experts
-            gate_logits = self.adapter_atten_gate(
-                torch.stack((attention_output, 
-                             audio_t + attention_output, 
-                             vision_t + attention_output), 
-                            dim=1)
-                        ).view(-1, N*3)
-            gate_logits = self.temporal_adapter(attention_output, audio_t + attention_output, vision_t + attention_output)
-            # per-token probabilities for each expert
-            gate_p = F.softmax(gate_logits, dim=1, dtype=torch.float).to(attention_output.dtype)
-            #print("Gate P", gate_p.shape)  # (bs*len, num_experts)
-            weights, selected_experts = torch.topk(gate_logits, topK)  # T, K
-            #print("Selected experts", selected_experts.shape, weights.shape)  # (bs*len, K)
-            weights = F.softmax(weights, dim=1, dtype=torch.float).to(attention_output.dtype)
-            #print("Weights after norm", weights.shape)
-            results = torch.zeros_like(attention_output)
-
-            experts = nn.ModuleList([
-                                 self.txt_local_exp, self.txt_global_exp,
-                                 self.au_local_exp, self.au_global_exp,
-                                 self.vis_local_exp, self.vis_global_exp,
-                                 ])
-            f = torch.zeros(N*3)
-            P = torch.zeros(N*3)
-            for i, expert in enumerate(experts):
-                f[i] = torch.sum(selected_experts == i).item() /T
-                P[i] = torch.sum(gate_p[:,i]) /T
-                batch_idx, nth_expert = torch.where(selected_experts == i)
-                if i<N:
-                    expert_output = expert(attention_output[batch_idx])
-                    #print("Text Expert", expert_output.shape)
-                elif i>(N-1) and i<2*N:
-                    expert_output = expert(audio_t[batch_idx]+attention_output[batch_idx])
-                    #print("Audio Expert", expert_output.shape)
-                else:
-                    expert_output = expert(vision_t[batch_idx]+attention_output[batch_idx])
-                    #print("Vision Expert", expert_output.shape)
-                results[batch_idx] += weights[batch_idx, nth_expert, None] * expert_output
-            
-            attention_output = attention_output.reshape(batch_size, sequence_length, hidden_dim)
-            results = results.reshape(batch_size, sequence_length, hidden_dim)
-            results = (32/self.rank) * results"""
-
             batch_size, sequence_length, hidden_dim = attention_output.shape
             T = batch_size * sequence_length
 
@@ -616,7 +570,7 @@ class XBertLayer(nn.Module):
             weights, selected_experts = torch.topk(gate_logits, topK)  # T x K
             weights = F.softmax(weights, dim=1, dtype=torch.float).to(attention_output.dtype)
 
-            # group per modality(t,v,a) and per type
+            # group per modality and per type
             expert_outputs = [
                 self.txt_local_exp(attention_output),                 
                 self.txt_global_exp(attention_output),            
@@ -657,7 +611,7 @@ class XBertLayer(nn.Module):
             gate_p = F.softmax(gate_logits, dim=1)
             P = gate_p.mean(dim=0)                         # (num_experts,)
 
-            # --- Load balancing ---
+            # load balancing
             lbloss = Load_Balancing_loss()
             num_modalities = 3       # text, audio, vision
             num_types = 2            # global, local
@@ -710,7 +664,7 @@ class BertEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-
+        print((self.config))
         self.start_fusion_layer = config.start_fusion_layer
         self.layer = nn.ModuleList([XBertLayer(config, add_adapter=(i>=self.start_fusion_layer)) for i in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
@@ -730,7 +684,9 @@ class BertEncoder(nn.Module):
         vision: Optional[bool] = None,
         audio: Optional[bool] = None,
         vision_length = None,
-        audio_length = None
+        audio_length = None,
+        audio_unaligned = None,
+        vision_unaligned = None
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPastAndCrossAttentions]:
         """
         Forward pass for the BertEncoder.
@@ -789,7 +745,9 @@ class BertEncoder(nn.Module):
                     vision=vision,
                     audio=audio,
                     vision_length = vision_length,
-                    audio_length = audio_length
+                    audio_length = audio_length,
+                    audio_unaligned = audio_unaligned,
+                    vision_unaligned = vision_unaligned
                     # layer = i
                 )
             LBLoss = LBLoss + LBLoss_layer
@@ -1026,7 +984,8 @@ class XBertModel(BertPreTrainedModel):
         return_dict: Optional[bool] = None,
         vision: Optional[bool] = None,
         audio: Optional[bool] = None,
-        audio_length=None, vision_length=None
+        audio_length=None, vision_length=None,
+        audio_unaligned=None, vision_unaligned=None
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
         r"""
         encoder_hidden_states  (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
@@ -1133,7 +1092,9 @@ class XBertModel(BertPreTrainedModel):
             vision=vision,
             audio=audio,
             vision_length = vision_length,
-            audio_length=audio_length
+            audio_length=audio_length,
+            audio_unaligned=audio_unaligned,
+            vision_unaligned=vision_unaligned
         )
         sequence_output = encoder_outputs[0]
         # expert_outputs  = encoder_outputs[-1]
