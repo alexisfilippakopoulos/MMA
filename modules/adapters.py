@@ -421,15 +421,17 @@ class GlobalTemporalExpert(nn.Module):
         return output
         
 class SynchronyExpert(nn.Module):
-    def __init__(self, config, d_model=768,
-                 bottleneck=64, dropout=0.2, 
+    def __init__(self, config=None, d_model=768, d_au=5,
+                 d_vis=20, bottleneck=64, dropout=0.2,
                  temporal_window=7,
-                 init_option="bert", 
-                 adapter_scalar="learnable_scalar", 
+                 init_option="bert",
+                 adapter_scalar="learnable_scalar",
                  adapter_layernorm_option="in"):
         super().__init__()
-        self.n_embd = config.d_model if d_model is None and config is not None else d_model
-        self.down_size = config.attn_bn if bottleneck is None and config is not None else bottleneck
+        self.n_embd = d_model
+        self.audio_dim = d_au
+        self.vision_dim = d_vis
+        self.down_size = bottleneck
         self.dropout = dropout
         self.temporal_window = temporal_window
 
@@ -446,8 +448,8 @@ class SynchronyExpert(nn.Module):
             self.scale = float(adapter_scalar)
 
         # unimodal down-projections
-        self.down_proj_audio = nn.Linear(self.n_embd, self.down_size)
-        self.down_proj_video = nn.Linear(self.n_embd, self.down_size)
+        self.down_proj_audio = nn.Linear(self.audio_dim, self.down_size)
+        self.down_proj_video = nn.Linear(self.vision_dim, self.down_size)
         self.non_linear_func = nn.ReLU()
 
         # temporal cross attn
@@ -508,7 +510,7 @@ class SynchronyExpert(nn.Module):
         audio_in_video_scale = audio_positions.unsqueeze(1) * (L_v / L_a)
         video_positions_expanded = video_positions.unsqueeze(0)
 
-        # temporal distance |i - j| 
+        # temporal distance |i - j|
         temporal_distance = torch.abs(audio_in_video_scale - video_positions_expanded)
         temporal_distance_int = torch.floor(temporal_distance).long()
 
@@ -517,30 +519,31 @@ class SynchronyExpert(nn.Module):
 
         # for positions within window, use learnable bias
         within_window = temporal_distance_int <= self.temporal_window
-        
+
         # clamp  [0, 2w]
         clamped_indices = torch.clamp(temporal_distance_int, 0, 2 * self.temporal_window)
-        
+
         # apply learnable bias
         bias[within_window] = self.proximity_bias[clamped_indices[within_window]]
 
         return bias
-        
 
-    def forward(self, x_text, video_features, audio_features, 
+
+    def forward(self, x_text, video_features, audio_features,
                 add_residual=False, residual=None):
-        
+
         batch_size, L_t, _ = x_text.shape
         _, L_v, _ = video_features.shape
         _, L_a, _ = audio_features.shape
 
         residual = x_text if residual is None else residual
-        
+
         # optional pre-layernorm on text input
         if self.adapter_layernorm_option == "in":
             x_text = self.adapter_layer_norm_before(x_text)
 
         # unimodal down-projections
+        print(video_features.shape)
         H_v = self.down_proj_video(video_features)
         H_v = self.non_linear_func(H_v)
 

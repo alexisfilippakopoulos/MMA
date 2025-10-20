@@ -112,7 +112,7 @@ class Solver(object):
                 
                 model.zero_grad()
                 with torch.cuda.device(0):
-                    vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda(), audio_unal.cuda(), vision_unal.cuda()
+                    vision, audio, text, y, audio_unal, vision_unal = vision.cuda(), audio.cuda(), text.cuda(), y.cuda(), audio_unal.cuda(), vision_unal.cuda()
                 
                 batch_size = y.size(0)               
                 preds, LBLoss, exp_freqs = model(vision, audio, text, audio_unal, vision_unal)
@@ -155,7 +155,7 @@ class Solver(object):
                     vision_unal = batch_data['vision_unal']
 
                     with torch.cuda.device(0):
-                        vision, audio, text, y = vision.cuda(), audio.cuda(), text.cuda(), y.cuda(), audio_unal.cuda(), vision_unal.cuda()
+                        vision, audio, text, y, audio_unal, vision_unal = vision.cuda(), audio.cuda(), text.cuda(), y.cuda(), audio_unal.cuda(), vision_unal.cuda()
                     batch_size = y.size(0)    
                     preds , _, exp_freqs = model(vision, audio, text, audio_unal, vision_unal)
                     exp_frequencies.append(exp_freqs.detach().cpu())         

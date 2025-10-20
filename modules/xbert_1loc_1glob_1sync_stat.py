@@ -478,6 +478,9 @@ class XBertLayer(nn.Module):
 
             self.vis_local_exp = LocalTemporalExpert_2(bottleneck=self.rank)
             self.vis_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+
+            self.sync_expert1 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
+            self.sync_expert2 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
         
             self.adapter_atten_gate = RouterPFSelfAttention()
             self.temporal_adapter = TemporalStatisticalRouter(embed_dim=768, num_experts=self.num_experts)
@@ -547,8 +550,6 @@ class XBertLayer(nn.Module):
             vision_t = self.text_vision_atten(queries=attention_output,keys=vision_hat,values=vision_hat,mask=key_padding_mask[:,:vision_hat.shape[1]])
     
              #-----------------------------adapter_change------------channel fusion------------------#
-            topK=self.TopK
-            N = self.num_experts // 3
 
             # every token position (across all sequences) is a separate sample of size [hidden_dim]
             batch_size, sequence_length, hidden_dim = attention_output.shape
@@ -563,7 +564,7 @@ class XBertLayer(nn.Module):
 
             # probabilities and select top-K
             gate_p = F.softmax(gate_logits, dim=1, dtype=torch.float).to(attention_output.dtype) # T x num_experts
-            weights, selected_experts = torch.topk(gate_logits, topK)  # T x K
+            weights, selected_experts = torch.topk(gate_logits, self.TopK)  # T x K
             weights = F.softmax(weights, dim=1, dtype=torch.float).to(attention_output.dtype)
 
             # group per modality and per type
@@ -573,7 +574,9 @@ class XBertLayer(nn.Module):
                 self.au_local_exp(audio_t + attention_output),      
                 self.au_global_exp(audio_t + attention_output),         
                 self.vis_local_exp(vision_t + attention_output),      
-                self.vis_global_exp(vision_t + attention_output),       
+                self.vis_global_exp(vision_t + attention_output),  
+                self.sync_expert1(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned),
+                self.sync_expert2(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned)     
             ]
 
             # num_experts x B x L_t x d_model
@@ -620,6 +623,9 @@ class XBertLayer(nn.Module):
                     end = start + N
                     lb_loss += lbloss(f[start:end], P[start:end])
 
+            sync_start = num_modalities * num_types * N  # 3*2*1 = 6
+            sync_end = self.num_experts                  # = 8
+            lb_loss += lbloss(f[sync_start:sync_end], P[sync_start:sync_end])
             lb_loss = lb_loss * N
 
         #------------------------------adapter_change------------------------------#
