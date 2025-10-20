@@ -444,7 +444,7 @@ class XBertLayer(nn.Module):
             self.crossattention = BertAttention(config, position_embedding_type="absolute")
         self.intermediate = BertIntermediate(config)
         self.output = BertOutput(config)
-        self.num_experts = 6
+        self.num_experts = 8
         self.add_adapter = add_adapter
         #  -----------------adapters-------------------------
         if add_adapter==True:
