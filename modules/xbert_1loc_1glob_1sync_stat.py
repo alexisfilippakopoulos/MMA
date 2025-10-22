@@ -482,15 +482,14 @@ class XBertLayer(nn.Module):
             self.sync_adapter1 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
             #self.sync_adapter2 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
         
-            #self.adapter_atten_gate = RouterPFSelfAttention()
+            self.temporal_adapter = RouterPFSelfAttention()
             #self.temporal_adapter = TemporalStatisticalRouter(embed_dim=768, num_experts=self.num_experts)
-            self.temporal_adapter = GlobalInformedSynchronyRouter(embed_dim=768,
+            """self.temporal_adapter = GlobalInformedSynchronyRouter(embed_dim=768,
                                                                 num_experts=self.num_experts,
                                                                 local_spatial_dim=64,
                                                                 local_temporal_dim=64,
                                                                 local_sync_dim=32,
-                                                                global_dim=64)
-
+                                                                global_dim=64)"""
     def forward(
         self,
         hidden_states: torch.Tensor,
