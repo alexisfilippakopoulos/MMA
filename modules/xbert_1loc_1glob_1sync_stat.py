@@ -470,17 +470,17 @@ class XBertLayer(nn.Module):
             self.adapter_1 = Adapter_Layer(bottleneck=self.rank)
             self.adapter_2 = Adapter_Layer(bottleneck=self.rank)"""
 
-            self.txt_local_exp = LocalTemporalExpert_2(bottleneck=self.rank)
-            self.txt_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+            self.txt_local_adapter = LocalTemporalExpert(bottleneck=self.rank)
+            self.txt_global_adapter = GlobalTemporalExpert(bottleneck=self.rank)
 
-            self.au_local_exp = LocalTemporalExpert_2(bottleneck=self.rank)
-            self.au_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+            self.au_local_adapter = LocalTemporalExpert(bottleneck=self.rank)
+            self.au_global_adapter = GlobalTemporalExpert(bottleneck=self.rank)
 
-            self.vis_local_exp = LocalTemporalExpert_2(bottleneck=self.rank)
-            self.vis_global_exp = GlobalTemporalExpert(bottleneck=self.rank)
+            self.vis_local_adapter = LocalTemporalExpert(bottleneck=self.rank)
+            self.vis_global_adapter = GlobalTemporalExpert(bottleneck=self.rank)
 
-            self.sync_expert1 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
-            self.sync_expert2 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
+            self.sync_adapter1 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
+            self.sync_adapter2 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
         
             self.adapter_atten_gate = RouterPFSelfAttention()
             self.temporal_adapter = TemporalStatisticalRouter(embed_dim=768, num_experts=self.num_experts)
@@ -569,14 +569,14 @@ class XBertLayer(nn.Module):
 
             # group per modality and per type
             expert_outputs = [
-                self.txt_local_exp(attention_output),                 
-                self.txt_global_exp(attention_output),            
-                self.au_local_exp(audio_t + attention_output),      
-                self.au_global_exp(audio_t + attention_output),         
-                self.vis_local_exp(vision_t + attention_output),      
-                self.vis_global_exp(vision_t + attention_output),  
-                self.sync_expert1(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned),
-                self.sync_expert2(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned)     
+                self.txt_local_adapter(attention_output),                 
+                self.txt_global_adapter(attention_output),            
+                self.au_local_adapter(audio_t + attention_output),      
+                self.au_global_adapter(audio_t + attention_output),         
+                self.vis_local_adapter(vision_t + attention_output),      
+                self.vis_global_adapter(vision_t + attention_output),  
+                self.sync_adapter1(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned),
+                self.sync_adapter2(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned)     
             ]
 
             # num_experts x B x L_t x d_model
@@ -610,23 +610,26 @@ class XBertLayer(nn.Module):
             gate_p = F.softmax(gate_logits, dim=1)
             P = gate_p.mean(dim=0)                         # (num_experts,)
 
-            # load balancing
+            groups = {
+                "text":   (0, 2),   
+                "audio":  (2, 4),   
+                "vision": (4, 6),   
+                "sync":   (6, 8),   
+            }
+
+            # --- Initialize loss function ---
             lbloss = Load_Balancing_loss()
-            num_modalities = 3       # text, audio, vision
-            num_types = 2            # global, local
-            N = self.num_experts // (num_modalities * num_types)
 
+            # --- Compute per-group intra-modality load balancing ---
             lb_loss = 0.0
-            for m in range(num_modalities):
-                for tau in range(num_types):
-                    start = m * (num_types * N) + tau * N
-                    end = start + N
-                    lb_loss += lbloss(f[start:end], P[start:end])
+            for name, (start, end) in groups.items():
+                f_slice = f[start:end]
+                P_slice = P[start:end]
+                N_g = end - start
+                #L_lb,g = N_g * Σ_n f_n P_n
+                lb_loss += N_g * lbloss(f_slice, P_slice)
 
-            sync_start = num_modalities * num_types * N  # 3*2*1 = 6
-            sync_end = self.num_experts                  # = 8
-            lb_loss += lbloss(f[sync_start:sync_end], P[sync_start:sync_end])
-            lb_loss = lb_loss * N
+            lb_loss = lb_loss / len(groups)
 
         #------------------------------adapter_change------------------------------#
 
