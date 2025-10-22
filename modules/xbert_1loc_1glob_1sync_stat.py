@@ -444,7 +444,7 @@ class XBertLayer(nn.Module):
             self.crossattention = BertAttention(config, position_embedding_type="absolute")
         self.intermediate = BertIntermediate(config)
         self.output = BertOutput(config)
-        self.num_experts = 7
+        self.num_experts = 8
         self.add_adapter = add_adapter
         #  -----------------adapters-------------------------
         if add_adapter==True:
@@ -480,7 +480,7 @@ class XBertLayer(nn.Module):
             self.vis_global_adapter = GlobalTemporalExpert(bottleneck=self.rank)
 
             self.sync_adapter1 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
-            #self.sync_adapter2 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
+            self.sync_adapter2 = SynchronyExpert(bottleneck=self.rank, d_au=self.audio_dim, d_vis=self.vision_dim, d_model=config.hidden_size)
         
             self.adapter_atten_gate = RouterPFSelfAttention()
             self.temporal_adapter = TemporalStatisticalRouter(embed_dim=768, num_experts=self.num_experts)
@@ -576,7 +576,7 @@ class XBertLayer(nn.Module):
                 self.vis_local_adapter(vision_t + attention_output),      
                 self.vis_global_adapter(vision_t + attention_output),  
                 self.sync_adapter1(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned),
-                #self.sync_adapter2(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned)     
+                self.sync_adapter2(x_text=attention_output, video_features=vision_unaligned, audio_features=audio_unaligned)     
             ]
 
             # num_experts x B x L_t x d_model
@@ -614,7 +614,7 @@ class XBertLayer(nn.Module):
                 "text":   (0, 2),   
                 "audio":  (2, 4),   
                 "vision": (4, 6),   
-                "sync":   (6, 7),   
+                "sync":   (6, 8),   
             }
 
             # --- Initialize loss function ---
@@ -626,7 +626,7 @@ class XBertLayer(nn.Module):
                 f_slice = f[start:end]
                 P_slice = P[start:end]
                 N_g = end - start
-                #L_lb,g = N_g * Σ_n f_n P_n
+                # L_lb,g = N_g * Σ_n f_n P_n
                 lb_loss += N_g * lbloss(f_slice, P_slice)
 
             lb_loss = lb_loss / len(groups)
