@@ -542,3 +542,150 @@ class UltraLightTemporalRouter(nn.Module):
         
         return gate_logits
     
+class GlobalInformedSynchronyRouter(nn.Module):
+    """
+    Implements the Global-Informed Synchrony Router.
+
+    This router makes token-level routing decisions by combining two streams:
+    1. Local Vector ("What"): Captures instantaneous content, volatility (change),
+       and audio-visual synchrony at the current token.
+    2. Global Vector ("Context"): Captures the average content, volatility,
+       and synchrony across the entire sequence.
+
+    The fusion of "What" (local) and "Context" (global) provides a rich
+    feature set for routing to spatial, temporal, or synchrony experts.
+
+    Args:
+        embed_dim (int): Dimension of input embeddings (d_t).
+        num_experts (int): Total number of experts to route to.
+        local_spatial_dim (int): Proj. dim for local spatial features.
+        local_temporal_dim (int): Proj. dim for local temporal features (deltas).
+        local_sync_dim (int): Proj. dim for local synchrony features (AV diff).
+        global_dim (int): Proj. dim for the final global context vector.
+    """
+    def __init__(self,
+                 embed_dim=768,
+                 num_experts=6,
+                 local_spatial_dim=128,
+                 local_temporal_dim=64,
+                 local_sync_dim=32,
+                 global_dim=64):
+        
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_experts = num_experts
+        
+        # --- Component 1: Local Feature Projections ---
+        
+        # 1a. Local Spatial Content (Text + Audio + Video)
+        self.local_spatial_proj = nn.Linear(3 * embed_dim, local_spatial_dim)
+        
+        # 1b. Local Temporal Volatility (Deltas for Text, Audio, Video)
+        self.local_temporal_proj = nn.Linear(3 * embed_dim, local_temporal_dim)
+        
+        # 1c. Local Synchrony (Audio-Video Difference)
+        self.local_sync_proj = nn.Linear(embed_dim, local_sync_dim)
+        
+        # --- Component 2: Global Summary Projection ---
+        
+        # The input to the global projector is the concatenation of the
+        # mean-pooled local spatial, temporal, and sync vectors.
+        local_summary_dim = local_spatial_dim + local_temporal_dim + local_sync_dim
+        self.global_proj = nn.Linear(local_summary_dim, global_dim)
+        
+        # --- Component 3: Final Routing Projection ---
+        
+        # The final routing layer takes the fusion of the
+        # full local vector and the broadcasted global vector.
+        final_feature_dim = local_summary_dim + global_dim
+        self.route_proj = nn.Linear(final_feature_dim, num_experts)
+        
+
+    def _compute_delta(self, x):
+        """
+        Computes the first-order difference: delta_i = x_i - x_{i-1}.
+        
+        Args:
+            x: (batch_size, seq_length, embed_dim)
+            
+        Returns:
+            delta: (batch_size, seq_length, embed_dim)
+        """
+        # Prepend the first token to create x_{i-1}
+        x_shifted = torch.cat([x[:, :1, :], x[:, :-1, :]], dim=1)
+        delta = x - x_shifted
+        return delta
+
+    def forward(self, x_text, x_au, x_vis):
+        """
+        Args:
+            x_text: (batch_size, seq_length, embed_dim)
+            x_au: (batch_size, seq_length, embed_dim)
+            x_vis: (batch_size, seq_length, embed_dim)
+            
+        Returns:
+            gate_logits: (batch_size * seq_length, num_experts)
+        """
+        batch_size, seq_length, _ = x_text.shape
+        
+        # ===== Component 1: Local Feature Extractor (The "What") =====
+        
+        # 1a. Local Spatial Content
+        local_spatial_in = torch.cat([x_text, x_au, x_vis], dim=-1)
+        local_spatial_vec = self.local_spatial_proj(local_spatial_in) # (B, S, 128)
+        
+        # 1b. Local Temporal Indicators (Volatility)
+        delta_text = self._compute_delta(x_text)
+        delta_audio = self._compute_delta(x_au)
+        delta_video = self._compute_delta(x_vis)
+        
+        local_temporal_in = torch.cat([delta_text, delta_audio, delta_video], dim=-1)
+        local_temporal_vec = self.local_temporal_proj(local_temporal_in) # (B, S, 64)
+        
+        # 1c. Local Synchrony Indicator
+        local_sync_in = x_au - x_vis
+        local_sync_vec = self.local_sync_proj(local_sync_in) # (B, S, 32)
+        
+        # 1d. Final Local Vector
+        # This is the full "What" vector for each token
+        local_vector = torch.cat([
+            local_spatial_vec, 
+            local_temporal_vec, 
+            local_sync_vec
+        ], dim=-1) # (B, S, 224)
+        
+        # ===== Component 2: Global Summary Generator (The "Context") =====
+        
+        # 2a. Pool all three local streams over the time dimension
+        global_spatial_summary = torch.mean(local_spatial_vec, dim=1) # (B, 128)
+        global_temp_summary = torch.mean(local_temporal_vec, dim=1)   # (B, 64)
+        global_sync_summary = torch.mean(local_sync_vec, dim=1)    # (B, 32)
+        
+        # 2b. Concatenate summaries and project to the final "Context" vector
+        global_summary = torch.cat([
+            global_spatial_summary, 
+            global_temp_summary, 
+            global_sync_summary
+        ], dim=-1) # (B, 224)
+        
+        global_vector = self.global_proj(global_summary) # (B, 64)
+        
+        # ===== Component 3: Fusion and Routing Logic (The "Decision") =====
+        
+        # 3a. Broadcast the "Context" vector to match the sequence length
+        # (B, 64) -> (B, 1, 64) -> (B, S, 64)
+        global_vector_expanded = global_vector.unsqueeze(1).expand(-1, seq_length, -1)
+        
+        # 3b. Fuse the "What" (local) and "Context" (global)
+        final_feature = torch.cat([
+            local_vector,             # (B, S, 224)
+            global_vector_expanded    # (B, S, 64)
+        ], dim=-1) # (B, S, 288)
+        
+        # 3c. Final Routing
+        gate_logits = self.route_proj(final_feature) # (B, S, num_experts)
+        
+        # Reshape for MoE loss/gating
+        gate_logits = gate_logits.view(-1, self.num_experts) # (B*S, num_experts)
+        
+        return gate_logits
